@@ -1,0 +1,27 @@
+import { z } from "zod";
+
+export const envSchema = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  PORT: z.coerce.number().int().positive().default(3000),
+  APP_URL: z.string().url().default("http://localhost:3000"),
+  JWT_SECRET: z.string().min(16),
+  JWT_EXPIRES_IN: z.string().default("7d"),
+  DATABASE_URL: z.string().min(1),
+  EXOTEL_API_KEY: z.string().optional(),
+  EXOTEL_API_TOKEN: z.string().optional(),
+  EXOTEL_SID: z.string().optional(),
+  EXOTEL_VIRTUAL_NUMBER: z.string().optional(),
+  CENTRAL_AGENT_NUMBER: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  OPENAI_TRANSCRIPTION_MODEL: z.string().default("whisper-1"),
+  ELEVENLABS_API_KEY: z.string().optional(),
+  ELEVENLABS_VOICE_ID: z.string().optional(),
+  WHATSAPP_API_URL: z.string().url().optional().or(z.literal("")),
+  WHATSAPP_API_TOKEN: z.string().optional(),
+  WHATSAPP_SENDER_ID: z.string().optional(),
+  WEBHOOK_SECRET: z.string().min(8),
+  DEFAULT_COUNTRY_CODE: z.string().default("+91"),
+});
+
+export type Env = z.infer<typeof envSchema>;
