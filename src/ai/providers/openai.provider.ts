@@ -1,6 +1,11 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
+type ChatMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
 @Injectable()
 export class OpenAiProvider {
   private readonly logger = new Logger(OpenAiProvider.name);
@@ -8,171 +13,106 @@ export class OpenAiProvider {
   constructor(@Inject(ConfigService) private readonly configService: ConfigService) {}
 
   async generateReply(prompt: string, customerText: string) {
-    const apiKey = this.configService.get<string>("OPENAI_API_KEY");
-    const model = this.configService.get<string>("OPENAI_MODEL") ?? "gpt-4o-mini";
+    const apiKey = this.getGroqApiKey();
+    const model = this.getGroqModel();
 
     if (!apiKey) {
-      this.logger.warn("OpenAI API key missing; returning fallback response");
+      this.logger.warn("Groq API key missing; returning fallback response");
       return {
         text: "Thanks for calling. We have captured your request and our team will contact you shortly.",
       };
     }
 
-    try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "system",
-              content: prompt,
-            },
-            {
-              role: "user",
-              content: customerText,
-            },
-          ],
-          temperature: 0.4,
-        }),
-      });
+    const completionText = await this.callChatCompletion({
+      apiKey,
+      model,
+      temperature: 0.4,
+      messages: [
+        { role: "system", content: prompt },
+        { role: "user", content: customerText },
+      ],
+      featureLabel: "generateReply",
+    });
 
-      if (!response.ok) {
-        this.logger.error(`OpenAI generateReply failed with status ${response.status}`);
-        return {
-          text: "Thanks for calling. We have captured your request and our team will contact you shortly.",
-        };
-      }
-
-      const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-
-      return {
-        text:
-          payload.choices?.[0]?.message?.content?.trim() ??
-          "Thanks for calling. We have captured your request and our team will contact you shortly.",
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown OpenAI error";
-      this.logger.error(`OpenAI generateReply error: ${message}`);
-      return {
-        text: "Thanks for calling. We have captured your request and our team will contact you shortly.",
-      };
-    }
+    return {
+      text:
+        completionText?.trim() ??
+        "Thanks for calling. We have captured your request and our team will contact you shortly.",
+    };
   }
 
   async extractLeadData(transcript: string) {
-    const apiKey = this.configService.get<string>("OPENAI_API_KEY");
-    const model = this.configService.get<string>("OPENAI_MODEL") ?? "gpt-4o-mini";
+    const apiKey = this.getGroqApiKey();
+    const model = this.getGroqModel();
 
     if (!apiKey) {
       return { name: undefined, intent: "general inquiry", notes: transcript.slice(0, 400) };
     }
 
-    try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
+    const completionText = await this.callChatCompletion({
+      apiKey,
+      model,
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Extract lead information from the call transcript. Return valid JSON only with keys: name, intent, notes.",
         },
-        body: JSON.stringify({
-          model,
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content:
-                "Extract lead information from the call transcript. Return JSON with keys: name, intent, notes.",
-            },
-            {
-              role: "user",
-              content: transcript,
-            },
-          ],
-          temperature: 0,
-        }),
-      });
+        {
+          role: "user",
+          content: transcript,
+        },
+      ],
+      featureLabel: "extractLeadData",
+    });
 
-      if (!response.ok) {
-        this.logger.error(`OpenAI extractLeadData failed with status ${response.status}`);
-        return { name: undefined, intent: "general inquiry", notes: transcript.slice(0, 400) };
-      }
-
-      const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const content = payload.choices?.[0]?.message?.content ?? "{}";
-
-      return this.safeParseLeadData(content, transcript);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown OpenAI error";
-      this.logger.error(`OpenAI extractLeadData error: ${message}`);
+    if (!completionText) {
       return { name: undefined, intent: "general inquiry", notes: transcript.slice(0, 400) };
     }
+
+    return this.safeParseLeadData(completionText, transcript);
   }
 
   async generateSummary(transcript: string) {
-    const apiKey = this.configService.get<string>("OPENAI_API_KEY");
-    const model = this.configService.get<string>("OPENAI_MODEL") ?? "gpt-4o-mini";
+    const apiKey = this.getGroqApiKey();
+    const model = this.getGroqModel();
 
     if (!apiKey) {
       return transcript.slice(0, 240);
     }
 
-    try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
+    const completionText = await this.callChatCompletion({
+      apiKey,
+      model,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Summarize this phone conversation in 2 concise sentences. Focus on customer intent and promised follow-up.",
         },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "system",
-              content:
-                "Summarize this phone conversation in 2 concise sentences. Focus on customer intent and promised follow-up.",
-            },
-            {
-              role: "user",
-              content: transcript,
-            },
-          ],
-          temperature: 0.2,
-        }),
-      });
+        {
+          role: "user",
+          content: transcript,
+        },
+      ],
+      featureLabel: "generateSummary",
+    });
 
-      if (!response.ok) {
-        this.logger.error(`OpenAI generateSummary failed with status ${response.status}`);
-        return transcript.slice(0, 240);
-      }
-
-      const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-
-      return payload.choices?.[0]?.message?.content?.trim() ?? transcript.slice(0, 240);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown OpenAI error";
-      this.logger.error(`OpenAI generateSummary error: ${message}`);
-      return transcript.slice(0, 240);
-    }
+    return completionText?.trim() ?? transcript.slice(0, 240);
   }
 
   async transcribeAudio(input: { buffer: Buffer; filename: string; mimeType: string }) {
-    const apiKey = this.configService.get<string>("OPENAI_API_KEY");
-    const model = this.configService.get<string>("OPENAI_TRANSCRIPTION_MODEL") ?? "whisper-1";
+    const apiKey = this.getGroqApiKey();
+    const model =
+      this.normalizeEnvValue(
+        this.configService.get<string>("GROQ_TRANSCRIPTION_MODEL") ?? process.env.GROQ_TRANSCRIPTION_MODEL,
+      ) ?? "whisper-large-v3-turbo";
 
     if (!apiKey) {
-      this.logger.warn("OpenAI API key missing; transcription fallback returns empty text");
-      return { text: "", error: "OPENAI_API_KEY is not configured", statusCode: 503 };
+      this.logger.warn("GROQ API key missing; transcription fallback returns empty text");
+      return { text: "", error: "GROQ_API_KEY is not configured", statusCode: 503 };
     }
 
     try {
@@ -188,8 +128,10 @@ export class OpenAiProvider {
         });
         formData.append("file", audioBlob, input.filename || "test-call.webm");
         formData.append("model", model);
+        formData.append("response_format", "verbose_json");
+        formData.append("language", "en");
 
-        const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -198,32 +140,112 @@ export class OpenAiProvider {
         });
 
         if (response.ok) {
-          const payload = (await response.json()) as { text?: string };
-          return { text: typeof payload.text === "string" ? payload.text.trim() : "" };
+          const payload = (await response.json()) as {
+            text?: string;
+            language?: string;
+            duration?: number;
+            segments?: Array<{ start: number; end: number; text: string }>;
+          };
+
+          return {
+            text: typeof payload.text === "string" ? payload.text.trim() : "",
+            language: payload.language,
+            duration: payload.duration,
+            segments: payload.segments,
+          };
         }
 
         const errorBody = (await response.text().catch(() => "")).trim();
 
         if (response.status === 429 && attempt < maxAttempts) {
-          this.logger.warn("OpenAI transcription rate-limited; retrying once");
+          this.logger.warn("Groq transcription rate-limited; retrying once");
           await this.delay(1000);
           continue;
         }
 
-        this.logger.error(`OpenAI transcribeAudio failed with status ${response.status}`);
+        this.logger.error(`Groq transcribeAudio failed with status ${response.status}`);
         return {
           text: "",
-          error: errorBody || `OpenAI transcription failed with status ${response.status}`,
+          error: errorBody || `Groq transcription failed with status ${response.status}`,
           statusCode: response.status,
         };
       }
 
-      return { text: "", error: "OpenAI transcription failed", statusCode: 500 };
+      return { text: "", error: "Groq transcription failed", statusCode: 500 };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown OpenAI transcription error";
-      this.logger.error(`OpenAI transcribeAudio error: ${message}`);
+      const message = error instanceof Error ? error.message : "Unknown Groq transcription error";
+      this.logger.error(`Groq transcribeAudio error: ${message}`);
       return { text: "", error: message, statusCode: 500 };
     }
+  }
+
+  private async callChatCompletion(input: {
+    apiKey: string;
+    model: string;
+    messages: ChatMessage[];
+    temperature: number;
+    featureLabel: "generateReply" | "extractLeadData" | "generateSummary";
+  }) {
+    try {
+      const maxAttempts = 2;
+      let attempt = 0;
+
+      while (attempt < maxAttempts) {
+        attempt += 1;
+
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${input.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: input.model,
+            messages: input.messages,
+            temperature: input.temperature,
+          }),
+        });
+
+        if (response.ok) {
+          const payload = (await response.json()) as {
+            choices?: Array<{ message?: { content?: string } }>;
+          };
+
+          return payload.choices?.[0]?.message?.content;
+        }
+
+        const errorBody = (await response.text().catch(() => "")).trim();
+
+        if (response.status === 429 && attempt < maxAttempts) {
+          this.logger.warn(`Groq ${input.featureLabel} rate-limited; retrying once`);
+          await this.delay(1000);
+          continue;
+        }
+
+        this.logger.error(`Groq ${input.featureLabel} failed with status ${response.status}`);
+        if (errorBody) {
+          this.logger.warn(`Groq ${input.featureLabel} error body: ${errorBody.slice(0, 300)}`);
+        }
+        return null;
+      }
+
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown Groq error";
+      this.logger.error(`Groq ${input.featureLabel} error: ${message}`);
+      return null;
+    }
+  }
+
+  private getGroqApiKey() {
+    return this.normalizeEnvValue(this.configService.get<string>("GROQ_API_KEY") ?? process.env.GROQ_API_KEY);
+  }
+
+  private getGroqModel() {
+    return (
+      this.normalizeEnvValue(this.configService.get<string>("GROQ_MODEL") ?? process.env.GROQ_MODEL) ??
+      "llama-3.1-8b-instant"
+    );
   }
 
   private async delay(ms: number) {
@@ -232,15 +254,30 @@ export class OpenAiProvider {
     });
   }
 
+  private normalizeEnvValue(value: string | undefined) {
+    if (!value) {
+      return undefined;
+    }
+
+    return value.trim().replace(/^"|"$/g, "").replace(/^'|'$/g, "");
+  }
+
   private safeParseLeadData(content: string, transcript: string) {
     try {
-      return JSON.parse(content) as {
+      const normalized = content
+        .trim()
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+
+      return JSON.parse(normalized) as {
         name?: string;
         intent?: string;
         notes?: string;
       };
     } catch {
-      this.logger.warn("OpenAI returned non-JSON lead data; using fallback extraction");
+      this.logger.warn("Groq returned non-JSON lead data; using fallback extraction");
       return { name: undefined, intent: "general inquiry", notes: transcript.slice(0, 400) };
     }
   }

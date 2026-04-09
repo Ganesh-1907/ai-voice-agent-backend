@@ -4,12 +4,20 @@ import { ConfigService } from "@nestjs/config";
 @Injectable()
 export class ElevenLabsProvider {
   private readonly logger = new Logger(ElevenLabsProvider.name);
+  private ttsTemporarilyDisabled = false;
 
   constructor(@Inject(ConfigService) private readonly configService: ConfigService) {}
 
   async textToSpeech(text: string) {
     const apiKey = this.configService.get<string>("ELEVENLABS_API_KEY");
     const voiceId = this.configService.get<string>("ELEVENLABS_VOICE_ID");
+
+    if (this.ttsTemporarilyDisabled) {
+      return {
+        audioBase64: null,
+        text,
+      };
+    }
 
     if (!apiKey || !voiceId) {
       this.logger.warn("ElevenLabs is not configured; returning text-only fallback");
@@ -33,7 +41,13 @@ export class ElevenLabsProvider {
       });
 
       if (!response.ok) {
-        this.logger.error(`ElevenLabs TTS failed with status ${response.status}`);
+        if (response.status === 401 || response.status === 402 || response.status === 403) {
+          this.ttsTemporarilyDisabled = true;
+          this.logger.warn(`ElevenLabs disabled for this process due to status ${response.status}`);
+        } else {
+          this.logger.error(`ElevenLabs TTS failed with status ${response.status}`);
+        }
+
         return {
           audioBase64: null,
           text,
