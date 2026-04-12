@@ -2,13 +2,33 @@ import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { and, desc, eq } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
-import { calls, callStatusEnum } from "../database/schema";
+import { callTurns, calls } from "../database/schema";
+
+type CallStatus = "initiated" | "in_progress" | "completed" | "failed";
+
+type CallLog = {
+  id: string;
+  businessId: string;
+  exotelCallSid?: string;
+  fromNumber: string;
+  toNumber: string;
+  originalBusinessNumber?: string;
+  status: CallStatus;
+  startedAt: string;
+  endedAt?: string;
+  durationSeconds?: number;
+  transcript?: string;
+  summary?: string;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
 
 @Injectable()
 export class CallsService {
   constructor(@Inject(DatabaseService) private readonly database: DatabaseService) {}
 
-  create(input: {
+  async create(input: {
     businessId: string;
     exotelCallSid?: string;
     fromNumber: string;
@@ -16,25 +36,35 @@ export class CallsService {
     originalBusinessNumber?: string;
     meta?: Record<string, unknown>;
   }) {
-    return this.database.db
+    const now = new Date();
+    const [created] = await this.database.db
       .insert(calls)
       .values({
-        businessId: input.businessId,
+        id: crypto.randomUUID(),
+        businessId: Number(input.businessId),
         exotelCallSid: input.exotelCallSid,
         fromNumber: input.fromNumber,
         toNumber: input.toNumber,
         originalBusinessNumber: input.originalBusinessNumber,
+        status: "initiated",
+        startedAt: now,
         meta: input.meta ?? {},
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
+
+    return [this.mapCall(created)];
   }
 
-  listByBusiness(businessId: string) {
-    return this.database.db
+  async listByBusiness(businessId: string) {
+    const rows = await this.database.db
       .select()
       .from(calls)
-      .where(eq(calls.businessId, businessId))
+      .where(eq(calls.businessId, Number(businessId)))
       .orderBy(desc(calls.createdAt));
+
+    return rows.map((row) => this.mapCall(row));
   }
 
   async getAnalyticsOverview(businessId: string) {
@@ -62,8 +92,8 @@ export class CallsService {
     };
   }
 
-  async updateStatus(callId: string, status: (typeof callStatusEnum.enumValues)[number]) {
-    const [call] = await this.database.db
+  async updateStatus(callId: string, status: CallStatus) {
+    const [updated] = await this.database.db
       .update(calls)
       .set({
         status,
@@ -73,15 +103,15 @@ export class CallsService {
       .where(eq(calls.id, callId))
       .returning();
 
-    if (!call) {
+    if (!updated) {
       throw new NotFoundException("Call not found");
     }
 
-    return call;
+    return this.mapCall(updated);
   }
 
   async attachTranscript(callId: string, transcript: string, summary?: string, durationSeconds?: number) {
-    const [call] = await this.database.db
+    const [updated] = await this.database.db
       .update(calls)
       .set({
         transcript,
@@ -92,25 +122,25 @@ export class CallsService {
       .where(eq(calls.id, callId))
       .returning();
 
-    if (!call) {
+    if (!updated) {
       throw new NotFoundException("Call not found");
     }
 
-    return call;
+    return this.mapCall(updated);
   }
 
   async getBusinessCallOrFail(businessId: string, callId: string) {
     const [call] = await this.database.db
       .select()
       .from(calls)
-      .where(and(eq(calls.id, callId), eq(calls.businessId, businessId)))
+      .where(and(eq(calls.id, callId), eq(calls.businessId, Number(businessId))))
       .limit(1);
 
     if (!call) {
       throw new NotFoundException("Call not found");
     }
 
-    return call;
+    return this.mapCall(call);
   }
 
   async getByIdOrFail(callId: string) {
@@ -120,41 +150,62 @@ export class CallsService {
       throw new NotFoundException("Call not found");
     }
 
-    return call;
+    return this.mapCall(call);
   }
 
   async appendConversationTurn(
     callId: string,
     turn: { speaker: "customer" | "agent"; text: string; createdAt: string },
   ) {
-    const call = await this.getByIdOrFail(callId);
-    const currentMeta = (call.meta ?? {}) as Record<string, unknown>;
-    const currentTurns = Array.isArray(currentMeta.turns) ? currentMeta.turns : [];
+    await this.getByIdOrFail(callId);
 
-    const [updatedCall] = await this.database.db
+    await this.database.db.insert(callTurns).values({
+      callId,
+      speaker: turn.speaker,
+      text: turn.text,
+      createdAt: new Date(turn.createdAt),
+    });
+
+    const [updated] = await this.database.db
       .update(calls)
-      .set({
-        meta: {
-          ...currentMeta,
-          turns: [...currentTurns, turn],
-        },
-        updatedAt: new Date(),
-      })
+      .set({ updatedAt: new Date() })
       .where(eq(calls.id, callId))
       .returning();
 
-    return updatedCall;
+    if (!updated) {
+      throw new NotFoundException("Call not found");
+    }
+
+    return this.mapCall(updated);
   }
 
-  buildTranscriptFromMeta(call: Awaited<ReturnType<CallsService["getByIdOrFail"]>>) {
-    const meta = (call.meta ?? {}) as Record<string, unknown>;
-    const turns = Array.isArray(meta.turns)
-      ? (meta.turns as Array<{ speaker?: string; text?: string }>)
-      : [];
+  async buildTranscriptFromMeta(call: Awaited<ReturnType<CallsService["getByIdOrFail"]>>) {
+    const turns = await this.database.db
+      .select({ speaker: callTurns.speaker, text: callTurns.text })
+      .from(callTurns)
+      .where(eq(callTurns.callId, call.id))
+      .orderBy(callTurns.createdAt);
 
-    return turns
-      .filter((turn) => typeof turn.speaker === "string" && typeof turn.text === "string")
-      .map((turn) => `${turn.speaker === "agent" ? "Agent" : "Customer"}: ${turn.text}`)
-      .join("\n");
+    return turns.map((turn) => `${turn.speaker === "agent" ? "Agent" : "Customer"}: ${turn.text}`).join("\n");
+  }
+
+  private mapCall(row: typeof calls.$inferSelect): CallLog {
+    return {
+      id: row.id,
+      businessId: String(row.businessId),
+      exotelCallSid: row.exotelCallSid ?? undefined,
+      fromNumber: row.fromNumber,
+      toNumber: row.toNumber,
+      originalBusinessNumber: row.originalBusinessNumber ?? undefined,
+      status: row.status,
+      startedAt: row.startedAt.toISOString(),
+      endedAt: row.endedAt ? row.endedAt.toISOString() : undefined,
+      durationSeconds: row.durationSeconds ?? undefined,
+      transcript: row.transcript ?? undefined,
+      summary: row.summary ?? undefined,
+      meta: (row.meta ?? {}) as Record<string, unknown>,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
   }
 }

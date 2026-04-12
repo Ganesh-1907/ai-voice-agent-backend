@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { JwtUser } from "../auth/types/jwt-user.type";
+import { UsersService } from "../users/users.service";
 import { BusinessesService } from "./businesses.service";
 import { CreateBusinessDto } from "./dto/create-business.dto";
 import { UpdateBusinessDto } from "./dto/update-business.dto";
@@ -11,7 +12,10 @@ import { UpdateBusinessDto } from "./dto/update-business.dto";
 @ApiBearerAuth()
 @Controller("businesses")
 export class BusinessesController {
-  constructor(@Inject(BusinessesService) private readonly businessesService: BusinessesService) {}
+  constructor(
+    @Inject(BusinessesService) private readonly businessesService: BusinessesService,
+    @Inject(UsersService) private readonly usersService: UsersService,
+  ) {}
 
   @Post()
   async create(@CurrentUser() user: JwtUser, @Body() dto: CreateBusinessDto) {
@@ -27,6 +31,12 @@ export class BusinessesController {
   @Get(":businessId")
   getOne(@CurrentUser() user: JwtUser, @Param("businessId") businessId: string) {
     return this.businessesService.findOwnedBusinessOrFail(user.sub, businessId);
+  }
+
+  @Get(":businessId/users")
+  async getBusinessUsers(@CurrentUser() user: JwtUser, @Param("businessId") businessId: string) {
+    await this.businessesService.assertAccess(user.sub, businessId);
+    return this.usersService.listByBusiness(businessId);
   }
 
   @Patch(":businessId")

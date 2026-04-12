@@ -6,6 +6,7 @@ import { Public } from "../common/decorators/public.decorator";
 import type { JwtUser } from "./types/jwt-user.type";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
+import { ResetUserPasswordDto } from "./dto/reset-user-password.dto";
 import { RegisterDto } from "./dto/register.dto";
 
 @ApiTags("Auth")
@@ -29,5 +30,11 @@ export class AuthController {
   @Get("me")
   me(@CurrentUser() user: JwtUser) {
     return this.authService.getProfile(user.sub);
+  }
+
+  @ApiBearerAuth()
+  @Post("dev/reset-password-by-email")
+  resetPasswordByEmail(@CurrentUser() user: JwtUser, @Body() dto: ResetUserPasswordDto) {
+    return this.authService.resetUserPasswordByEmail(user.sub, dto);
   }
 }

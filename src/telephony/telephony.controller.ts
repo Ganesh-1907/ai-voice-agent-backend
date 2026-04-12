@@ -20,7 +20,9 @@ import { BusinessesService } from "../businesses/businesses.service";
 import { CallsService } from "../calls/calls.service";
 import { CompleteCallDto } from "./dto/complete-call.dto";
 import { ExotelCallWebhookDto } from "./dto/exotel-call-webhook.dto";
+import { PublicTestCallTurnDto } from "./dto/public-test-call-turn.dto";
 import { ProcessAgentTurnDto } from "./dto/process-agent-turn.dto";
+import { StartPublicTestCallDto } from "./dto/start-public-test-call.dto";
 import { StartTestCallDto } from "./dto/start-test-call.dto";
 import { TestCallCompleteDto } from "./dto/test-call-complete.dto";
 import { TestCallTurnDto } from "./dto/test-call-turn.dto";
@@ -253,6 +255,44 @@ export class TelephonyController {
   @Post("dev/test-call-turn")
   testCallTurn(@Body() dto: TestCallTurnDto) {
     return this.telephonyService.simulateAgentTurn(dto.businessId, dto.customerText);
+  }
+
+  @Public()
+  @Post("public/test-call/start")
+  startPublicTestCall(@Body() dto: StartPublicTestCallDto) {
+    return this.telephonyService.startPublicTestCall(dto);
+  }
+
+  @Public()
+  @Post("public/test-call/:callId/turn")
+  publicTestCallTurn(@Param("callId") callId: string, @Body() dto: PublicTestCallTurnDto) {
+    return this.telephonyService.processAgentTurn(callId, dto.customerText);
+  }
+
+  @Public()
+  @Post("public/test-call/:callId/complete")
+  publicCompleteTestCall(@Param("callId") callId: string) {
+    return this.telephonyService.completeTestCall(callId, {});
+  }
+
+  @Public()
+  @Post("public/test-call/:callId/transcribe")
+  @UseInterceptors(FileInterceptor("audio"))
+  async transcribePublicTestCallAudio(
+    @Param("callId") callId: string,
+    @UploadedFile() file: { buffer: Buffer; originalname: string; mimetype: string; size: number } | undefined,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("Audio file is required");
+    }
+
+    await this.callsService.getByIdOrFail(callId);
+
+    return this.telephonyService.transcribeAudio({
+      buffer: file.buffer,
+      filename: file.originalname ?? "public-test-call.webm",
+      mimeType: file.mimetype ?? "audio/webm",
+    });
   }
 
   @ApiBearerAuth()

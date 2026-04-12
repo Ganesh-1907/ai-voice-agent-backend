@@ -9,6 +9,9 @@
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
     "lint": "tsc --noEmit",
+    "drizzle:generate": "dotenv -e .env -- drizzle-kit generate --config=drizzle.config.ts",
+    "drizzle:migrate": "dotenv -e .env -- drizzle-kit migrate --config=drizzle.config.ts",
+    "drizzle:start": "dotenv -e .env -- drizzle-kit studio --config=drizzle.config.ts",
     "test": "npm run build && node test/smoke-test.js",
     "test:watch": "tsx watch src/main.ts"
   },
@@ -39,6 +42,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
     "@types/passport-jwt": "^4.0.1",
+    "dotenv-cli": "^7.4.4",
     "drizzle-kit": "^0.24.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

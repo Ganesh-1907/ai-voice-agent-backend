@@ -128,7 +128,7 @@ export class OpenAiProvider {
         });
         formData.append("file", audioBlob, input.filename || "test-call.webm");
         formData.append("model", model);
-        formData.append("response_format", "verbose_json");
+        formData.append("response_format", "json");
         formData.append("language", "en");
 
         const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
@@ -159,7 +159,7 @@ export class OpenAiProvider {
 
         if (response.status === 429 && attempt < maxAttempts) {
           this.logger.warn("Groq transcription rate-limited; retrying once");
-          await this.delay(1000);
+          await this.delay(350);
           continue;
         }
 
@@ -203,6 +203,7 @@ export class OpenAiProvider {
             model: input.model,
             messages: input.messages,
             temperature: input.temperature,
+            max_tokens: 90,
           }),
         });
 
@@ -218,7 +219,7 @@ export class OpenAiProvider {
 
         if (response.status === 429 && attempt < maxAttempts) {
           this.logger.warn(`Groq ${input.featureLabel} rate-limited; retrying once`);
-          await this.delay(1000);
+          await this.delay(350);
           continue;
         }
 

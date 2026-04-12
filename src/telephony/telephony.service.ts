@@ -6,8 +6,10 @@ import { BusinessesService } from "../businesses/businesses.service";
 import { CallsService } from "../calls/calls.service";
 import { LeadsService } from "../leads/leads.service";
 import { ExotelCallWebhookDto } from "./dto/exotel-call-webhook.dto";
+import { StartPublicTestCallDto } from "./dto/start-public-test-call.dto";
 import { StartTestCallDto } from "./dto/start-test-call.dto";
 import { TestCallCompleteDto } from "./dto/test-call-complete.dto";
+import { UpdatesService } from "../updates/updates.service";
 import { ExotelProvider } from "./providers/exotel.provider";
 
 @Injectable()
@@ -18,6 +20,7 @@ export class TelephonyService {
     @Inject(CallsService) private readonly callsService: CallsService,
     @Inject(AiService) private readonly aiService: AiService,
     @Inject(LeadsService) private readonly leadsService: LeadsService,
+    @Inject(UpdatesService) private readonly updatesService: UpdatesService,
     @Inject(ExotelProvider) private readonly exotelProvider: ExotelProvider,
   ) {}
 
@@ -61,13 +64,14 @@ export class TelephonyService {
     const call = await this.callsService.getByIdOrFail(callId);
     const business = await this.businessesService.findByIdOrFail(call.businessId);
     await this.callsService.updateStatus(callId, "in_progress");
-    await this.callsService.appendConversationTurn(callId, {
+    const callWithCustomerTurn = await this.callsService.appendConversationTurn(callId, {
       speaker: "customer",
       text: customerText,
       createdAt: new Date().toISOString(),
     });
+    const conversationContext = await this.callsService.buildTranscriptFromMeta(callWithCustomerTurn);
 
-    const aiReply = await this.aiService.processCallTurn(business, customerText);
+    const aiReply = await this.aiService.processCallTurn(business, customerText, conversationContext);
     await this.callsService.appendConversationTurn(callId, {
       speaker: "agent",
       text: aiReply.replyText,
@@ -106,6 +110,31 @@ export class TelephonyService {
     };
   }
 
+  async startPublicTestCall(dto: StartPublicTestCallDto) {
+    const business = await this.businessesService.getByRoutingNumber(dto.toNumber);
+    if (!business) {
+      throw new NotFoundException("No business matched this dialed number");
+    }
+
+    const [call] = await this.callsService.create({
+      businessId: business.id,
+      fromNumber: dto.fromNumber,
+      toNumber: dto.toNumber,
+      originalBusinessNumber: dto.toNumber,
+      meta: {
+        mode: "public-test-call",
+        turns: [],
+      },
+    });
+
+    return {
+      callId: call.id,
+      businessId: business.id,
+      businessName: business.name,
+      greeting: this.businessesService.getAgentGreeting(business),
+    };
+  }
+
   transcribeAudio(input: { buffer: Buffer; filename: string; mimeType: string }) {
     return this.aiService.transcribeAudio(input);
   }
@@ -127,10 +156,17 @@ export class TelephonyService {
 
   async completeTestCall(callId: string, body: TestCallCompleteDto) {
     const call = await this.callsService.getByIdOrFail(callId);
-    const transcript = this.callsService.buildTranscriptFromMeta(call);
+    const transcript = await this.callsService.buildTranscriptFromMeta(call);
     const summary = await this.aiService.generateSummary(transcript || body.notes || "Test call completed.");
     const updatedCall = await this.callsService.attachTranscript(callId, transcript, summary);
     await this.callsService.updateStatus(callId, "completed");
+    const update = await this.updatesService.createFromCall({
+      businessId: call.businessId,
+      callId,
+      fromNumber: call.fromNumber,
+      summary,
+      transcript,
+    });
 
     let lead = null;
     if (body.customerPhone) {
@@ -151,6 +187,7 @@ export class TelephonyService {
     return {
       call: updatedCall,
       lead,
+      update,
       whatsappDisabled: true,
     };
   }
@@ -165,6 +202,13 @@ export class TelephonyService {
     const summary = await this.aiService.generateSummary(input.transcript);
     const call = await this.callsService.attachTranscript(input.callId, input.transcript, summary);
     await this.callsService.updateStatus(input.callId, "completed");
+    const update = await this.updatesService.createFromCall({
+      businessId: input.businessId,
+      callId: input.callId,
+      fromNumber: input.customerPhone,
+      summary,
+      transcript: input.transcript,
+    });
 
     const extractedLead = await this.aiService.extractLeadData(input.transcript);
     const [lead] = await this.leadsService.create(
@@ -181,6 +225,7 @@ export class TelephonyService {
     return {
       call,
       lead,
+      update,
       message: null,
       whatsappDisabled: true,
       nextStep: `Call stored for ${business.name}. WhatsApp follow-up is disabled for now.`,

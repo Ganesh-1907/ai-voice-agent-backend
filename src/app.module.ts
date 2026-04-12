@@ -15,6 +15,8 @@ import { MessagingModule } from "./messaging/messaging.module";
 import { PlansModule } from "./plans/plans.module";
 import { TelephonyModule } from "./telephony/telephony.module";
 import { CallsModule } from "./calls/calls.module";
+import { ProductsModule } from "./products/products.module";
+import { UpdatesModule } from "./updates/updates.module";
 
 @Module({
   imports: [
@@ -33,6 +35,8 @@ import { CallsModule } from "./calls/calls.module";
     LeadsModule,
     MessagingModule,
     PlansModule,
+    ProductsModule,
+    UpdatesModule,
   ],
   providers: [
     {
