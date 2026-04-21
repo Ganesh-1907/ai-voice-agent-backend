@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
 import { AiService } from "../ai/ai.service";
@@ -24,8 +24,10 @@ export class TelephonyService {
     @Inject(ExotelProvider) private readonly exotelProvider: ExotelProvider,
   ) {}
 
-  async handleIncomingWebhook(dto: ExotelCallWebhookDto) {
-    const routingNumber = dto.OriginalBusinessNumber ?? dto.To;
+  async handleIncomingWebhook(dto: ExotelCallWebhookDto, webhookSecret?: string) {
+    this.assertWebhookSecret(webhookSecret);
+
+    const routingNumber = this.resolveRoutingNumber(dto);
     if (!routingNumber) {
       throw new NotFoundException("Could not determine business number from webhook");
     }
@@ -35,19 +37,42 @@ export class TelephonyService {
       throw new NotFoundException("Business not found for incoming number");
     }
 
-    const [call] = await this.callsService.create({
-      businessId: business.id,
-      exotelCallSid: dto.CallSid,
-      fromNumber: dto.From ?? "unknown",
-      toNumber: dto.To ?? business.virtualPhoneNumber ?? business.businessPhoneNumber,
-      originalBusinessNumber: routingNumber,
-      meta: dto,
-    });
+    const exotelCallSid = this.resolveCallSid(dto);
+    const fromNumber = this.resolveCustomerNumber(dto) ?? "unknown";
+    const toNumber = this.resolveToNumber(dto) ?? business.virtualPhoneNumber ?? business.businessPhoneNumber;
+
+    const existingCall = exotelCallSid ? await this.callsService.getByExotelCallSid(exotelCallSid) : null;
+
+    const call =
+      existingCall ??
+      (
+        await this.callsService.create({
+          businessId: business.id,
+          exotelCallSid,
+          fromNumber,
+          toNumber,
+          originalBusinessNumber: routingNumber,
+          meta: {
+            ...dto,
+            webhookResolved: {
+              routingNumber,
+              fromNumber,
+              toNumber,
+              exotelCallSid,
+            },
+          },
+        })
+      )[0];
+
+    const mappedStatus = this.mapExotelStatusToCallStatus(dto.Status ?? dto.CallStatus);
+    if (existingCall && mappedStatus && existingCall.status !== mappedStatus) {
+      await this.callsService.updateStatus(existingCall.id, mappedStatus);
+    }
 
     const routing = await this.exotelProvider.connectCallToAiAgent({
-      exotelCallSid: dto.CallSid,
+      exotelCallSid,
       businessNumber: routingNumber,
-      customerNumber: dto.From,
+      customerNumber: fromNumber,
     });
 
     return {
@@ -237,5 +262,118 @@ export class TelephonyService {
     if (nodeEnv === "production") {
       throw new NotFoundException("Test call simulation is not available in production");
     }
+  }
+
+  private assertWebhookSecret(webhookSecret?: string) {
+    const nodeEnv = this.configService.get<string>("NODE_ENV") ?? "development";
+    if (nodeEnv !== "production") {
+      return;
+    }
+
+    const configuredSecret = this.configService.get<string>("WEBHOOK_SECRET");
+    if (!configuredSecret) {
+      throw new ForbiddenException("Webhook secret is not configured");
+    }
+
+    if (!webhookSecret || webhookSecret !== configuredSecret) {
+      throw new ForbiddenException("Invalid webhook secret");
+    }
+  }
+
+  private resolveRoutingNumber(dto: ExotelCallWebhookDto) {
+    return (
+      this.firstString([
+        dto.OriginalBusinessNumber,
+        dto.OriginalCalledNumber,
+        dto.CalledNumber,
+        dto.DialWhomNumber,
+        this.readField(dto, [
+          "OriginalBusinessNumber",
+          "OriginalCalledNumber",
+          "CalledNumber",
+          "DialWhomNumber",
+          "original_business_number",
+          "original_called_number",
+          "called_number",
+          "dial_whom_number",
+          "destination",
+          "Destination",
+        ]),
+        this.resolveToNumber(dto),
+      ]) ?? null
+    );
+  }
+
+  private resolveCallSid(dto: ExotelCallWebhookDto) {
+    return this.firstString([
+      dto.CallSid,
+      this.readField(dto, ["CallSid", "call_sid", "Sid", "sid", "CallUUID", "call_uuid"]),
+    ]);
+  }
+
+  private resolveCustomerNumber(dto: ExotelCallWebhookDto) {
+    return this.firstString([
+      dto.From,
+      this.readField(dto, ["From", "from", "Caller", "caller", "CallerNumber", "caller_number"]),
+    ]);
+  }
+
+  private resolveToNumber(dto: ExotelCallWebhookDto) {
+    return this.firstString([
+      dto.To,
+      this.readField(dto, ["To", "to", "Called", "called", "ToNumber", "to_number"]),
+    ]);
+  }
+
+  private mapExotelStatusToCallStatus(status: string | undefined): "initiated" | "in_progress" | "completed" | "failed" | null {
+    if (!status) {
+      return null;
+    }
+
+    const normalized = status.toLowerCase().trim();
+    if (["queued", "initiated", "ringing"].includes(normalized)) {
+      return "initiated";
+    }
+    if (["in-progress", "in progress", "ongoing", "active", "answered"].includes(normalized)) {
+      return "in_progress";
+    }
+    if (["completed", "ended", "hangup", "hanguped", "finished"].includes(normalized)) {
+      return "completed";
+    }
+    if (["failed", "busy", "no-answer", "no answer", "canceled", "cancelled"].includes(normalized)) {
+      return "failed";
+    }
+
+    return null;
+  }
+
+  private readField(payload: Record<string, unknown>, keys: string[]) {
+    const normalizedLookup = new Map<string, unknown>();
+    for (const [key, value] of Object.entries(payload)) {
+      normalizedLookup.set(this.normalizeFieldKey(key), value);
+    }
+
+    for (const key of keys) {
+      const value = normalizedLookup.get(this.normalizeFieldKey(key));
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+
+    return undefined;
+  }
+
+  private normalizeFieldKey(value: string) {
+    return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  }
+
+  private firstString(values: Array<string | undefined>) {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+
+    return undefined;
   }
 }

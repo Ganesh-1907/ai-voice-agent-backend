@@ -6,15 +6,23 @@ type ChatMessage = {
   content: string;
 };
 
+type FunctionRouteSelection = {
+  function: 1 | 2 | 3;
+  data?: Record<string, unknown>;
+};
+
 @Injectable()
 export class OpenAiProvider {
   private readonly logger = new Logger(OpenAiProvider.name);
+  private sqlRateLimitedUntil = 0;
+  private readonly decommissionedModels = new Set<string>();
 
   constructor(@Inject(ConfigService) private readonly configService: ConfigService) {}
 
   async generateReply(prompt: string, customerText: string) {
     const apiKey = this.getGroqApiKey();
-    const model = this.getGroqModel();
+    const model = this.getGroqPrimaryModel();
+    const fallbackModel = this.getGroqFallbackModel();
 
     if (!apiKey) {
       this.logger.warn("Groq API key missing; returning fallback response");
@@ -26,7 +34,9 @@ export class OpenAiProvider {
     const completionText = await this.callChatCompletion({
       apiKey,
       model,
+      fallbackModel,
       temperature: 0.4,
+      maxTokens: 220,
       messages: [
         { role: "system", content: prompt },
         { role: "user", content: customerText },
@@ -41,9 +51,127 @@ export class OpenAiProvider {
     };
   }
 
+  async generateSqlQuery(input: {
+    schemaPrompt: string;
+    businessId: string;
+    userQuery: string;
+    conversationContext?: string;
+  }) {
+    const apiKey = this.getGroqApiKey();
+    const model = this.getGroqPrimaryModel();
+    const fallbackModel = this.getGroqFallbackModel();
+
+    if (!apiKey) {
+      return null;
+    }
+
+    const completionText = await this.callChatCompletion({
+      apiKey,
+      model,
+      fallbackModel,
+      temperature: 0,
+      maxTokens: 280,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Generate one safe PostgreSQL SELECT query only.",
+            "Output plain SQL only. No markdown. No explanation.",
+            "Keep the SQL concise and single-statement.",
+            "Select only columns required for the user request; avoid wide SELECT lists.",
+            "For list cars by price, prefer columns: id, name, brand, model, variant, category, status, price, currency.",
+            "For count requests, return COUNT(*) as total_count.",
+            "Must include WHERE business_id = <BUSINESS_ID> for business-scoped tables.",
+            "Never use INSERT/UPDATE/DELETE/ALTER/DROP/TRUNCATE.",
+            "Prefer LIMIT 20 unless a smaller set is enough.",
+            "Use only these tables and columns:",
+            input.schemaPrompt,
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [
+            `BUSINESS_ID=${input.businessId}`,
+            `Conversation context: ${input.conversationContext ?? "none"}`,
+            `User query: ${input.userQuery}`,
+          ].join("\n"),
+        },
+      ],
+      featureLabel: "generateSqlQuery",
+    });
+
+    if (!completionText) {
+      return null;
+    }
+
+    return completionText
+      .trim()
+      .replace(/^```sql\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```$/i, "")
+      .trim();
+  }
+
+  async selectFunctionRoute(input: { customerText: string; conversationContext?: string }) {
+    const apiKey = this.getGroqApiKey();
+    const model = this.getGroqPrimaryModel();
+    const fallbackModel = this.getGroqFallbackModel();
+
+    if (!apiKey) {
+      return null;
+    }
+
+    const completionText = await this.callChatCompletion({
+      apiKey,
+      model,
+      fallbackModel,
+      temperature: 0,
+      maxTokens: 180,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are a function router for a car dealership call assistant.",
+            "Choose exactly one function and return JSON only.",
+            "Allowed response format:",
+            '{"function": <1|2|3>, "data": {...}}',
+            "Function 1: inventory fetch/list/count by filters like min/max price, fuelType, transmission, location, suvOnly, limit, sortOrder, mode(list|count|remaining).",
+            "Function 2: business details such as business name, location, contact number.",
+            "Function 3: booking flow with carName, customerName, customerMobile.",
+            "If query references previous listed cars (those/them/same range/remaining), choose function 1 with mode='remaining' or mode='list'.",
+            "Do not include markdown, comments, or extra text.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [
+            `Conversation context (latest messages): ${input.conversationContext ?? "none"}`,
+            `Customer query: ${input.customerText}`,
+          ].join("\n"),
+        },
+      ],
+      featureLabel: "selectFunctionRoute",
+    });
+
+    if (!completionText) {
+      return null;
+    }
+
+    return this.safeParseFunctionRouteSelection(completionText);
+  }
+
+  isSqlGenerationRateLimited() {
+    return Date.now() < this.sqlRateLimitedUntil;
+  }
+
+  getSqlRateLimitedUntil() {
+    return this.sqlRateLimitedUntil;
+  }
+
   async extractLeadData(transcript: string) {
     const apiKey = this.getGroqApiKey();
-    const model = this.getGroqModel();
+    const model = this.getGroqPrimaryModel();
+    const fallbackModel = this.getGroqFallbackModel();
 
     if (!apiKey) {
       return { name: undefined, intent: "general inquiry", notes: transcript.slice(0, 400) };
@@ -52,7 +180,9 @@ export class OpenAiProvider {
     const completionText = await this.callChatCompletion({
       apiKey,
       model,
+      fallbackModel,
       temperature: 0,
+      maxTokens: 120,
       messages: [
         {
           role: "system",
@@ -76,7 +206,8 @@ export class OpenAiProvider {
 
   async generateSummary(transcript: string) {
     const apiKey = this.getGroqApiKey();
-    const model = this.getGroqModel();
+    const model = this.getGroqPrimaryModel();
+    const fallbackModel = this.getGroqFallbackModel();
 
     if (!apiKey) {
       return transcript.slice(0, 240);
@@ -85,7 +216,9 @@ export class OpenAiProvider {
     const completionText = await this.callChatCompletion({
       apiKey,
       model,
+      fallbackModel,
       temperature: 0.2,
+      maxTokens: 120,
       messages: [
         {
           role: "system",
@@ -182,70 +315,128 @@ export class OpenAiProvider {
   private async callChatCompletion(input: {
     apiKey: string;
     model: string;
+    fallbackModel?: string;
     messages: ChatMessage[];
     temperature: number;
-    featureLabel: "generateReply" | "extractLeadData" | "generateSummary";
+    maxTokens: number;
+    featureLabel:
+      | "generateReply"
+      | "extractLeadData"
+      | "generateSummary"
+      | "generateSqlQuery"
+      | "selectFunctionRoute";
   }) {
-    try {
-      const maxAttempts = 2;
+    const modelsToTry = [input.model, input.fallbackModel, this.getGroqEmergencyFallbackModel()]
+      .filter((value): value is string => !!value)
+      .filter((value, index, source) => source.indexOf(value) === index)
+      .filter((value) => !this.decommissionedModels.has(value));
+
+    const maxAttempts = 2;
+
+    for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex += 1) {
+      const currentModel = modelsToTry[modelIndex];
+      const nextModel = modelsToTry[modelIndex + 1];
       let attempt = 0;
 
       while (attempt < maxAttempts) {
         attempt += 1;
 
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${input.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: input.model,
-            messages: input.messages,
-            temperature: input.temperature,
-            max_tokens: 90,
-          }),
-        });
+        try {
+          const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${input.apiKey}`,
+            },
+            body: JSON.stringify({
+              model: currentModel,
+              messages: input.messages,
+              temperature: input.temperature,
+              max_tokens: input.maxTokens,
+            }),
+          });
 
-        if (response.ok) {
-          const payload = (await response.json()) as {
-            choices?: Array<{ message?: { content?: string } }>;
-          };
+          if (response.ok) {
+            const payload = (await response.json()) as {
+              choices?: Array<{ message?: { content?: string } }>;
+            };
 
-          return payload.choices?.[0]?.message?.content;
+            return payload.choices?.[0]?.message?.content;
+          }
+
+          const errorBody = (await response.text().catch(() => "")).trim();
+
+          if (response.status === 429 && attempt < maxAttempts) {
+            if (input.featureLabel === "generateSqlQuery") {
+              this.markSqlRateLimitedUntil(errorBody);
+            }
+            this.logger.warn(`Groq ${input.featureLabel} rate-limited on model ${currentModel}; retrying once`);
+            await this.delay(350);
+            continue;
+          }
+
+          if (response.status === 429 && input.featureLabel === "generateSqlQuery") {
+            this.markSqlRateLimitedUntil(errorBody);
+          }
+
+          const isModelDecommissioned =
+            response.status === 400 && /model_decommissioned|decommissioned and is no longer supported/i.test(errorBody);
+          if (isModelDecommissioned) {
+            this.decommissionedModels.add(currentModel);
+            this.logger.warn(`Groq model ${currentModel} is decommissioned; marking as unavailable for this process.`);
+          }
+
+          this.logger.error(`Groq ${input.featureLabel} failed with status ${response.status} on model ${currentModel}`);
+          if (errorBody) {
+            this.logger.warn(`Groq ${input.featureLabel} error body: ${errorBody.slice(0, 300)}`);
+          }
+
+          if (nextModel) {
+            this.logger.warn(`Groq ${input.featureLabel} switching model from ${currentModel} to ${nextModel}`);
+            break;
+          }
+
+          return null;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown Groq error";
+          this.logger.error(`Groq ${input.featureLabel} error on model ${currentModel}: ${message}`);
+
+          if (nextModel) {
+            this.logger.warn(`Groq ${input.featureLabel} switching model from ${currentModel} to ${nextModel}`);
+            break;
+          }
+
+          return null;
         }
-
-        const errorBody = (await response.text().catch(() => "")).trim();
-
-        if (response.status === 429 && attempt < maxAttempts) {
-          this.logger.warn(`Groq ${input.featureLabel} rate-limited; retrying once`);
-          await this.delay(350);
-          continue;
-        }
-
-        this.logger.error(`Groq ${input.featureLabel} failed with status ${response.status}`);
-        if (errorBody) {
-          this.logger.warn(`Groq ${input.featureLabel} error body: ${errorBody.slice(0, 300)}`);
-        }
-        return null;
       }
-
-      return null;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown Groq error";
-      this.logger.error(`Groq ${input.featureLabel} error: ${message}`);
-      return null;
     }
+
+    return null;
   }
 
   private getGroqApiKey() {
     return this.normalizeEnvValue(this.configService.get<string>("GROQ_API_KEY") ?? process.env.GROQ_API_KEY);
   }
 
-  private getGroqModel() {
+  private getGroqPrimaryModel() {
     return (
       this.normalizeEnvValue(this.configService.get<string>("GROQ_MODEL") ?? process.env.GROQ_MODEL) ??
+      "llama-3.3-70b-versatile"
+    );
+  }
+
+  private getGroqFallbackModel() {
+    return (
+      this.normalizeEnvValue(this.configService.get<string>("GROQ_FALLBACK_MODEL") ?? process.env.GROQ_FALLBACK_MODEL) ??
       "llama-3.1-8b-instant"
+    );
+  }
+
+  private getGroqEmergencyFallbackModel() {
+    return (
+      this.normalizeEnvValue(
+        this.configService.get<string>("GROQ_EMERGENCY_FALLBACK_MODEL") ?? process.env.GROQ_EMERGENCY_FALLBACK_MODEL,
+      ) ?? "llama-3.1-8b-instant"
     );
   }
 
@@ -253,6 +444,32 @@ export class OpenAiProvider {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, ms);
     });
+  }
+
+  private markSqlRateLimitedUntil(errorBody: string) {
+    const fallbackMs = 3 * 60 * 1000;
+    const waitMs = this.parseRetryAfterMsFromError(errorBody) ?? fallbackMs;
+    const target = Date.now() + waitMs;
+    if (target > this.sqlRateLimitedUntil) {
+      this.sqlRateLimitedUntil = target;
+    }
+  }
+
+  private parseRetryAfterMsFromError(errorBody: string) {
+    const match = errorBody.match(/try again in\s+((?:\d+m)?\s*(?:\d+(?:\.\d+)?)s)/i);
+    if (!match?.[1]) {
+      return null;
+    }
+
+    const segment = match[1].trim().toLowerCase();
+    const minuteMatch = segment.match(/(\d+)m/);
+    const secondMatch = segment.match(/(\d+(?:\.\d+)?)s/);
+
+    const minutes = minuteMatch ? Number(minuteMatch[1]) : 0;
+    const seconds = secondMatch ? Number(secondMatch[1]) : 0;
+    const totalMs = (minutes * 60 + seconds) * 1000;
+
+    return Number.isFinite(totalMs) && totalMs > 0 ? totalMs : null;
   }
 
   private normalizeEnvValue(value: string | undefined) {
@@ -281,5 +498,45 @@ export class OpenAiProvider {
       this.logger.warn("Groq returned non-JSON lead data; using fallback extraction");
       return { name: undefined, intent: "general inquiry", notes: transcript.slice(0, 400) };
     }
+  }
+
+  private safeParseFunctionRouteSelection(content: string): FunctionRouteSelection | null {
+    try {
+      const normalized = content
+        .trim()
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+
+      const jsonCandidate = this.extractFirstJsonObject(normalized) ?? normalized;
+      const parsed = JSON.parse(jsonCandidate) as {
+        function?: unknown;
+        data?: unknown;
+      };
+
+      const fn = Number(parsed.function);
+      if (fn !== 1 && fn !== 2 && fn !== 3) {
+        return null;
+      }
+
+      return {
+        function: fn,
+        data: parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : {},
+      };
+    } catch {
+      this.logger.warn("Groq returned non-JSON function route; falling back to deterministic routing");
+      return null;
+    }
+  }
+
+  private extractFirstJsonObject(text: string) {
+    const firstBrace = text.indexOf("{");
+    const lastBrace = text.lastIndexOf("}");
+    if (firstBrace < 0 || lastBrace <= firstBrace) {
+      return null;
+    }
+
+    return text.slice(firstBrace, lastBrace + 1);
   }
 }

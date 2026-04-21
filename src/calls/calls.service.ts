@@ -153,6 +153,20 @@ export class CallsService {
     return this.mapCall(call);
   }
 
+  async getByExotelCallSid(exotelCallSid: string) {
+    if (!exotelCallSid?.trim()) {
+      return null;
+    }
+
+    const [call] = await this.database.db
+      .select()
+      .from(calls)
+      .where(eq(calls.exotelCallSid, exotelCallSid.trim()))
+      .limit(1);
+
+    return call ? this.mapCall(call) : null;
+  }
+
   async appendConversationTurn(
     callId: string,
     turn: { speaker: "customer" | "agent"; text: string; createdAt: string },

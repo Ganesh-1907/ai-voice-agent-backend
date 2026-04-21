@@ -3,12 +3,15 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Header,
   Inject,
   Param,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
+  ValidationPipe,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
@@ -242,8 +245,19 @@ export class TelephonyController {
 
   @Public()
   @Post("webhooks/exotel/incoming-call")
-  incomingCall(@Body() dto: ExotelCallWebhookDto) {
-    return this.telephonyService.handleIncomingWebhook(dto);
+  incomingCall(
+    @Body(
+      new ValidationPipe({
+        whitelist: false,
+        forbidNonWhitelisted: false,
+        transform: true,
+      }),
+    )
+    dto: ExotelCallWebhookDto,
+    @Headers("x-webhook-secret") headerSecret?: string,
+    @Query("secret") querySecret?: string,
+  ) {
+    return this.telephonyService.handleIncomingWebhook(dto, headerSecret ?? querySecret);
   }
 
   @Post("calls/:callId/agent-turn")

@@ -30,6 +30,26 @@ export class ExotelCallWebhookDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  OriginalCalledNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  CalledNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  DialWhomNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  CallStatus?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
   RecordingUrl?: string;
 
   [key: string]: unknown;
