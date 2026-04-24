@@ -1,7 +1,6 @@
 import { relations } from "drizzle-orm";
 
 import {
-  aiAgents,
   businessFaqs,
   businesses,
   businessSettings,
@@ -25,7 +24,6 @@ export const businessesRelations = relations(businesses, ({ one, many }) => ({
   }),
   users: many(users),
   settings: one(businessSettings),
-  aiAgents: many(aiAgents),
   categories: many(categories),
   products: many(products),
   faqs: many(businessFaqs),
@@ -48,14 +46,6 @@ export const businessSettingsRelations = relations(businessSettings, ({ one }) =
     fields: [businessSettings.businessId],
     references: [businesses.id],
   }),
-}));
-
-export const aiAgentsRelations = relations(aiAgents, ({ one, many }) => ({
-  business: one(businesses, {
-    fields: [aiAgents.businessId],
-    references: [businesses.id],
-  }),
-  calls: many(calls),
 }));
 
 export const categoriesRelations = relations(categories, ({ one, many }) => ({
@@ -113,10 +103,6 @@ export const callsRelations = relations(calls, ({ one, many }) => ({
   business: one(businesses, {
     fields: [calls.businessId],
     references: [businesses.id],
-  }),
-  aiAgent: one(aiAgents, {
-    fields: [calls.aiAgentId],
-    references: [aiAgents.id],
   }),
   turns: many(callTurns),
   leads: many(leads),

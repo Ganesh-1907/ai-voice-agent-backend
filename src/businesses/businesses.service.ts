@@ -35,6 +35,7 @@ export class BusinessesService {
         city: typeof dto.settings?.city === "string" ? dto.settings.city : undefined,
         state: typeof dto.settings?.state === "string" ? dto.settings.state : undefined,
         address: typeof dto.settings?.address === "string" ? dto.settings.address : undefined,
+        googleMapLink: typeof dto.settings?.googleMapLink === "string" ? dto.settings.googleMapLink : undefined,
         metadata: {
           ...(dto.settings ?? {}),
           planCode: dto.planCode ?? "starter",
@@ -148,6 +149,10 @@ export class BusinessesService {
         city: typeof dto.settings?.city === "string" ? dto.settings.city : existing.city ?? undefined,
         state: typeof dto.settings?.state === "string" ? dto.settings.state : existing.state ?? undefined,
         address: typeof dto.settings?.address === "string" ? dto.settings.address : existing.address ?? undefined,
+        googleMapLink:
+          typeof dto.settings?.googleMapLink === "string"
+            ? dto.settings.googleMapLink
+            : existing.googleMapLink ?? undefined,
         metadata: mergedSettings,
         updatedAt: new Date(),
       })
@@ -234,6 +239,7 @@ export class BusinessesService {
       city: row.city ?? null,
       state: row.state ?? null,
       address: row.address ?? null,
+      googleMapLink: row.googleMapLink ?? null,
       planCode:
         row.planCode ?? (metadata.planCode === "growth" || metadata.planCode === "pro" ? metadata.planCode : "starter"),
       isActive: row.voiceAgentEnabled,

@@ -8,6 +8,13 @@
       "when": 1777045564292,
       "tag": "0000_initial_voice_ai_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777045564293,
+      "tag": "0001_single_shared_voice_agent",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,7 @@
     "drizzle:pull": "dotenv -e .env -- sh -c 'rm -rf drizzle/.pull && drizzle-kit pull --config=drizzle.config.ts --out drizzle/.pull --introspect-casing camel && cp drizzle/.pull/schema.ts src/database/schema.ts && if [ -f drizzle/.pull/relations.ts ]; then cp drizzle/.pull/relations.ts src/database/relations.ts; fi && rm -rf drizzle/.pull'",
     "drizzle:push": "dotenv -e .env -- drizzle-kit push --config=drizzle.config.ts",
     "drizzle:deploy": "npm run drizzle:generate && npm run drizzle:migrate",
+    "seed": "dotenv -e .env -- tsx src/database/seed.ts",
     "test": "npm run build && node test/smoke-test.js",
     "test:watch": "tsx watch src/main.ts"
   },

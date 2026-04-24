@@ -54,7 +54,6 @@ export const productStatusEnum = pgEnum("product_status", ["draft", "active", "a
 export const fuelTypeEnum = pgEnum("fuel_type", ["petrol", "diesel", "electric", "hybrid", "cng", "lpg", "other"]);
 export const transmissionTypeEnum = pgEnum("transmission_type", ["manual", "automatic", "semi_automatic", "other"]);
 
-export const aiAgentStatusEnum = pgEnum("ai_agent_status", ["active", "paused", "inactive"]);
 export const callStatusEnum = pgEnum("call_status", ["initiated", "in_progress", "answered", "missed", "completed", "failed"]);
 export const callTurnSpeakerEnum = pgEnum("call_turn_speaker", ["customer", "agent", "system"]);
 export const leadTypeEnum = pgEnum("lead_type", ["enquiry", "booking", "callback", "order", "preorder", "book_table", "general"]);
@@ -98,6 +97,7 @@ export const businesses = pgTable(
     city: varchar("city", { length: 100 }),
     state: varchar("state", { length: 100 }),
     address: text("address"),
+    googleMapLink: text("google_map_link"),
     planCode: planCodeEnum("plan_code").notNull().default("starter"),
     status: accountStatusEnum("status").notNull().default("active"),
     voiceAgentEnabled: boolean("voice_agent_enabled").notNull().default(true),
@@ -164,29 +164,6 @@ export const businessSettings = pgTable(
   },
   (table) => ({
     businessIdx: uniqueIndex("business_settings_business_id_unique").on(table.businessId),
-  }),
-);
-
-export const aiAgents = pgTable(
-  "ai_agents",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    businessId: bigint("business_id", { mode: "number" }).references(() => businesses.id, { onDelete: "cascade" }),
-    name: varchar("name", { length: 140 }).notNull().default("Voice AI Agent"),
-    provider: varchar("provider", { length: 80 }).notNull().default("openai"),
-    model: varchar("model", { length: 120 }),
-    voiceProvider: varchar("voice_provider", { length: 80 }),
-    voiceId: varchar("voice_id", { length: 160 }),
-    phoneNumber: varchar("phone_number", { length: 30 }),
-    status: aiAgentStatusEnum("status").notNull().default("active"),
-    instructions: text("instructions"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => ({
-    businessIdx: index("ai_agents_business_id_idx").on(table.businessId),
-    phoneIdx: index("ai_agents_phone_number_idx").on(table.phoneNumber),
   }),
 );
 
@@ -326,7 +303,6 @@ export const calls = pgTable(
     businessId: bigint("business_id", { mode: "number" })
       .notNull()
       .references(() => businesses.id, { onDelete: "cascade" }),
-    aiAgentId: bigint("ai_agent_id", { mode: "number" }).references(() => aiAgents.id, { onDelete: "set null" }),
     exotelCallSid: varchar("exotel_call_sid", { length: 120 }),
     fromNumber: varchar("from_number", { length: 30 }).notNull(),
     toNumber: varchar("to_number", { length: 30 }).notNull(),
@@ -348,7 +324,6 @@ export const calls = pgTable(
   },
   (table) => ({
     businessIdx: index("calls_business_id_idx").on(table.businessId),
-    aiAgentIdx: index("calls_ai_agent_id_idx").on(table.aiAgentId),
     exotelSidIdx: uniqueIndex("calls_exotel_call_sid_unique").on(table.exotelCallSid),
     statusIdx: index("calls_status_idx").on(table.status),
     readStatusIdx: index("calls_read_status_idx").on(table.readStatus),

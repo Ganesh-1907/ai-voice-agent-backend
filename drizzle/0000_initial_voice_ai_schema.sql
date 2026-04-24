@@ -5,12 +5,6 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
- CREATE TYPE "public"."ai_agent_status" AS ENUM('active', 'paused', 'inactive');
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
  CREATE TYPE "public"."call_request_status" AS ENUM('pending', 'approved', 'rejected', 'callback_scheduled', 'callback_completed', 'called', 'not_called');
 EXCEPTION
  WHEN duplicate_object THEN null;
@@ -106,22 +100,6 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS "ai_agents" (
-	"id" bigserial PRIMARY KEY NOT NULL,
-	"business_id" bigint,
-	"name" varchar(140) DEFAULT 'Voice AI Agent' NOT NULL,
-	"provider" varchar(80) DEFAULT 'openai' NOT NULL,
-	"model" varchar(120),
-	"voice_provider" varchar(80),
-	"voice_id" varchar(160),
-	"phone_number" varchar(30),
-	"status" "ai_agent_status" DEFAULT 'active' NOT NULL,
-	"instructions" text,
-	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
-);
---> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "business_faqs" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"business_id" bigint NOT NULL,
@@ -165,6 +143,7 @@ CREATE TABLE IF NOT EXISTS "businesses" (
 	"city" varchar(100),
 	"state" varchar(100),
 	"address" text,
+	"google_map_link" text,
 	"plan_code" "plan_code" DEFAULT 'starter' NOT NULL,
 	"status" "account_status" DEFAULT 'active' NOT NULL,
 	"voice_agent_enabled" boolean DEFAULT true NOT NULL,
@@ -212,7 +191,6 @@ CREATE TABLE IF NOT EXISTS "call_turns" (
 CREATE TABLE IF NOT EXISTS "calls" (
 	"id" text PRIMARY KEY NOT NULL,
 	"business_id" bigint NOT NULL,
-	"ai_agent_id" bigint,
 	"exotel_call_sid" varchar(120),
 	"from_number" varchar(30) NOT NULL,
 	"to_number" varchar(30) NOT NULL,
@@ -363,12 +341,6 @@ CREATE TABLE IF NOT EXISTS "users" (
 );
 --> statement-breakpoint
 DO $$ BEGIN
- ALTER TABLE "ai_agents" ADD CONSTRAINT "ai_agents_business_id_businesses_id_fk" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
  ALTER TABLE "business_faqs" ADD CONSTRAINT "business_faqs_business_id_businesses_id_fk" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
@@ -412,12 +384,6 @@ END $$;
 --> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "calls" ADD CONSTRAINT "calls_business_id_businesses_id_fk" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "calls" ADD CONSTRAINT "calls_ai_agent_id_ai_agents_id_fk" FOREIGN KEY ("ai_agent_id") REFERENCES "public"."ai_agents"("id") ON DELETE set null ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
@@ -500,8 +466,6 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "ai_agents_business_id_idx" ON "ai_agents" USING btree ("business_id");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "ai_agents_phone_number_idx" ON "ai_agents" USING btree ("phone_number");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "business_faqs_business_id_idx" ON "business_faqs" USING btree ("business_id");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "business_settings_business_id_unique" ON "business_settings" USING btree ("business_id");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "businesses_slug_unique" ON "businesses" USING btree ("slug");--> statement-breakpoint
@@ -515,7 +479,6 @@ CREATE INDEX IF NOT EXISTS "call_requests_status_idx" ON "call_requests" USING b
 CREATE INDEX IF NOT EXISTS "call_requests_request_type_idx" ON "call_requests" USING btree ("request_type");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "call_turns_call_id_idx" ON "call_turns" USING btree ("call_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "calls_business_id_idx" ON "calls" USING btree ("business_id");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "calls_ai_agent_id_idx" ON "calls" USING btree ("ai_agent_id");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "calls_exotel_call_sid_unique" ON "calls" USING btree ("exotel_call_sid");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "calls_status_idx" ON "calls" USING btree ("status");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "calls_read_status_idx" ON "calls" USING btree ("read_status");--> statement-breakpoint
