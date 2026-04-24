@@ -19,6 +19,7 @@ export class BusinessesService {
       .values({
         businessName: dto.name,
         slug: dto.slug,
+        ownerUserId: owner.id,
         serviceType:
           dto.settings?.serviceType === "car_dealer" ||
           dto.settings?.serviceType === "appliance_store" ||
@@ -29,6 +30,8 @@ export class BusinessesService {
         contactNumber: dto.businessPhoneNumber,
         primaryEmail: typeof dto.settings?.primaryEmail === "string" ? dto.settings.primaryEmail : undefined,
         primaryMobile: dto.virtualPhoneNumber,
+        forwardingNumber: dto.virtualPhoneNumber,
+        planCode: dto.planCode ?? "starter",
         city: typeof dto.settings?.city === "string" ? dto.settings.city : undefined,
         state: typeof dto.settings?.state === "string" ? dto.settings.state : undefined,
         address: typeof dto.settings?.address === "string" ? dto.settings.address : undefined,
@@ -54,6 +57,15 @@ export class BusinessesService {
   async listForOwner(ownerUserId: string) {
     const owner = await this.getOwnerUserOrFail(ownerUserId);
 
+    if (owner.role === "super_admin") {
+      const rows = await this.database.db.select().from(businesses).orderBy(desc(businesses.createdAt));
+      return rows.map((row) => this.toApiBusiness(row));
+    }
+
+    if (owner.businessId === null) {
+      return [];
+    }
+
     const rows = await this.database.db
       .select()
       .from(businesses)
@@ -66,6 +78,14 @@ export class BusinessesService {
   async findOwnedBusinessOrFail(ownerUserId: string, businessId: string) {
     const owner = await this.getOwnerUserOrFail(ownerUserId);
     const businessIdNum = Number(businessId);
+
+    if (owner.role === "super_admin") {
+      return this.findByIdOrFail(businessId);
+    }
+
+    if (owner.businessId === null) {
+      throw new NotFoundException("Business not found");
+    }
 
     const [business] = await this.database.db
       .select()
@@ -123,6 +143,8 @@ export class BusinessesService {
             ? dto.settings.primaryEmail
             : existing.primaryEmail ?? undefined,
         primaryMobile: dto.virtualPhoneNumber ?? existing.virtualPhoneNumber ?? undefined,
+        forwardingNumber: dto.virtualPhoneNumber ?? existing.virtualPhoneNumber ?? undefined,
+        planCode: dto.planCode ?? existing.planCode ?? "starter",
         city: typeof dto.settings?.city === "string" ? dto.settings.city : existing.city ?? undefined,
         state: typeof dto.settings?.state === "string" ? dto.settings.state : existing.state ?? undefined,
         address: typeof dto.settings?.address === "string" ? dto.settings.address : existing.address ?? undefined,
@@ -170,6 +192,10 @@ export class BusinessesService {
     const business = await this.findOwnedBusinessOrFail(ownerUserId, businessId);
     const owner = await this.getOwnerUserOrFail(ownerUserId);
 
+    if (owner.role === "super_admin") {
+      return business;
+    }
+
     if (String(owner.businessId) !== String(business.id)) {
       throw new ForbiddenException("You do not have access to this business");
     }
@@ -209,7 +235,7 @@ export class BusinessesService {
       state: row.state ?? null,
       address: row.address ?? null,
       planCode:
-        metadata.planCode === "growth" || metadata.planCode === "pro" ? metadata.planCode : "starter",
+        row.planCode ?? (metadata.planCode === "growth" || metadata.planCode === "pro" ? metadata.planCode : "starter"),
       isActive: row.voiceAgentEnabled,
       settings: metadata,
       createdAt: row.createdAt,

@@ -14,7 +14,7 @@ NestJS backend for the AI call handling SaaS described in the PRD.
 - Call, transcript, and lead storage flows
 - Call analytics with transcripts and summaries
 - Swagger docs at `/docs`
-- PostgreSQL + Drizzle schema setup
+- PostgreSQL + Drizzle tooling ready for the next schema
 
 ## Project structure
 
@@ -27,14 +27,14 @@ NestJS backend for the AI call handling SaaS described in the PRD.
 - `src/calls`: call records and transcripts
 - `src/leads`: extracted lead management
 - `src/messaging`: WhatsApp follow-ups
-- `src/database`: Drizzle schema and database service
+- `src/database`: Drizzle database service and the current schema file
 
 ## Setup
 
 1. Copy `.env.example` to `.env`
 2. Update all provider credentials
-3. Create the PostgreSQL database
-4. Run:
+3. Add your PostgreSQL `DATABASE_URL`
+4. Apply the generated migration, then run:
 
 ```bash
 npm install
@@ -42,11 +42,26 @@ npm run build
 npm run start:dev
 ```
 
+## Drizzle workflow
+
+After adding the new `DATABASE_URL`, use these commands:
+
+```bash
+npm run drizzle:migrate
+npm run drizzle:studio
+```
+
+- `drizzle:migrate` applies the generated schema migration to the configured database.
+- `drizzle:studio` opens Drizzle Studio for the database in `.env`.
+- `drizzle:generate` creates SQL migrations from `src/database/schema.ts`.
+- `drizzle:pull` introspects the database and refreshes `src/database/schema.ts` plus `src/database/relations.ts` after manual Studio or SQL-editor changes.
+- `drizzle:deploy` runs generate and migrate together for a fresh database.
+
 ## Important notes
 
 - Exotel, OpenAI, ElevenLabs, and WhatsApp provider classes are integrated as clean HTTP wrappers.
 - If provider credentials are missing, the backend falls back gracefully so local development can continue.
-- You should add proper Drizzle migrations before production rollout.
+- Add or pull the new Drizzle schema before using DB-backed routes.
 - WhatsApp follow-up delivery is currently disabled by product request.
 - For production telephony, the next step should be streaming call audio rather than end-of-call transcript-only processing.
 

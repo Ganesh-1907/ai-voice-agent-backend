@@ -4,7 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { DatabaseService } from "../database/database.service";
 import { callTurns, calls } from "../database/schema";
 
-type CallStatus = "initiated" | "in_progress" | "completed" | "failed";
+type CallStatus = "initiated" | "in_progress" | "answered" | "missed" | "completed" | "failed";
 
 type CallLog = {
   id: string;

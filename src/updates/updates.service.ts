@@ -5,8 +5,15 @@ import { DatabaseService } from "../database/database.service";
 import { businesses, callRequests } from "../database/schema";
 import { MessagingService } from "../messaging/messaging.service";
 
-export type BusinessUpdateType = "order" | "preorder" | "book_table" | "callback_request" | "general";
-export type BusinessUpdateStatus = "pending" | "approved" | "rejected" | "callback_scheduled" | "callback_completed";
+export type BusinessUpdateType = "order" | "preorder" | "book_table" | "callback_request" | "enquiry" | "booking" | "general";
+export type BusinessUpdateStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "callback_scheduled"
+  | "callback_completed"
+  | "called"
+  | "not_called";
 
 export type BusinessUpdateRecord = {
   id: string;
@@ -200,6 +207,8 @@ export class UpdatesService {
       preorder: "pre-order",
       book_table: "booking",
       callback_request: "callback request",
+      enquiry: "enquiry",
+      booking: "booking",
       general: "request",
     };
 
