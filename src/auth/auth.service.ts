@@ -67,7 +67,7 @@ export class AuthService {
     }
 
     const requester = await this.usersService.findByIdOrFail(requesterUserId);
-    if (requester.role !== "owner" && requester.role !== "admin") {
+    if (requester.role !== "super_admin" && requester.role !== "owner" && requester.role !== "admin") {
       throw new ForbiddenException("Only owner/admin users can reset passwords");
     }
 

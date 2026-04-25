@@ -19,6 +19,7 @@ type CallBusinessContext = {
   city?: string | null;
   state?: string | null;
   address?: string | null;
+  googleMapLink?: string | null;
   settings: Record<string, unknown>;
 };
 
@@ -673,6 +674,7 @@ export class AiService {
     const address = details.address?.trim();
     const city = details.city?.trim();
     const state = details.state?.trim();
+    const googleMapLink = details.googleMapLink?.trim();
     const number = details.contactNumber?.trim() || business.businessPhoneNumber;
 
     const locationParts: string[] = [];
@@ -693,6 +695,9 @@ export class AiService {
     if (needsLocation) {
       if (locationParts.length > 0) {
         replies.push(`We're located at ${locationParts.join(", ")}.`);
+        if (googleMapLink) {
+          replies.push(`Map link: ${googleMapLink}`);
+        }
       } else {
         replies.push("I do not have the exact location details right now.");
       }
@@ -718,6 +723,7 @@ export class AiService {
       {
         businessName,
         location: locationParts.join(", "),
+        googleMapLink,
         contactNumber: number,
       },
       templateReply,
@@ -1455,6 +1461,7 @@ export class AiService {
       const address = details?.address?.trim();
       const city = details?.city?.trim();
       const state = details?.state?.trim();
+      const googleMapLink = details?.googleMapLink?.trim();
       const locationParts: string[] = [];
 
       if (address) {
@@ -1469,7 +1476,7 @@ export class AiService {
 
       const location = locationParts.join(", ").trim();
       if (location) {
-        return `We're located at ${location}.`;
+        return googleMapLink ? `We're located at ${location}. Map link: ${googleMapLink}` : `We're located at ${location}.`;
       }
       return "I do not have the exact location details right now. Please share your number and our team will send you the address.";
     }
@@ -1485,7 +1492,7 @@ export class AiService {
 
     try {
       const result = await this.database.db.execute(sql`
-        select business_name, contact_number, city, state, address
+        select business_name, contact_number, city, state, address, google_map_link
         from businesses
         where id = ${parsedId}
         limit 1
@@ -1506,6 +1513,7 @@ export class AiService {
         city: typeof first.city === "string" ? first.city : undefined,
         state: typeof first.state === "string" ? first.state : undefined,
         address: typeof first.address === "string" ? first.address : undefined,
+        googleMapLink: typeof first.google_map_link === "string" ? first.google_map_link : undefined,
       };
     } catch {
       return null;
@@ -1530,14 +1538,20 @@ export class AiService {
 
   private getSqlSchemaPrompt() {
     return [
-      "Table: businesses(id, business_name, slug, service_type, contact_number, primary_email, primary_mobile, city, state, address, voice_agent_enabled, metadata, created_at, updated_at)",
+      "Table: businesses(id, business_name, slug, service_type, contact_number, primary_email, primary_mobile, city, state, address, google_map_link, voice_agent_enabled, metadata, created_at, updated_at)",
       "Table: users(id, business_id, email, password_hash, mobile, name, role, is_active, last_login_at, created_at, updated_at)",
-      "Table: products(id, business_id, name, slug, description, category, condition, status, sku, brand, model, variant, price, discount_price, currency, stock_quantity, manufacture_year, registration_year, purchase_year, mileage_km, fuel_type, transmission, color, location_city, location_state, condition_notes, search_tags, specifications, is_featured, sold_at, created_at, updated_at)",
+      "Table: business_settings(id, business_id, opening_time, closing_time, working_days, booking_enabled, auto_answer_enabled, ai_instructions, welcome_message, fallback_message, created_at, updated_at)",
+      "Table: categories(id, business_id, parent_id, name, slug, item_type, sort_order, is_active, created_at, updated_at)",
+      "Table: products(id, business_id, category_id, name, slug, description, category, item_type, condition, status, sku, brand, model, variant, price, discount_price, currency, stock_quantity, manufacture_year, registration_year, purchase_year, mileage_km, fuel_type, transmission, color, location_city, location_state, condition_notes, search_tags, specifications, is_negotiable, is_featured, sold_at, created_at, updated_at)",
+      "Table: product_features(id, product_id, feature_name, feature_value, sort_order, created_at, updated_at)",
       "Table: product_images(id, product_id, image_url, alt_text, is_primary, sort_order, created_at, updated_at)",
-      "Table: calls(id, business_id, exotel_call_sid, from_number, to_number, original_business_number, status, started_at, ended_at, duration_seconds, transcript, summary, meta, created_at, updated_at)",
+      "Table: business_faqs(id, business_id, question, answer, sort_order, is_active, created_at, updated_at)",
+      "Table: calls(id, business_id, exotel_call_sid, from_number, to_number, original_business_number, customer_name, customer_phone, status, read_status, started_at, answered_at, ended_at, duration_seconds, transcript, summary, recording_url, meta, created_at, updated_at)",
       "Table: call_turns(id, call_id, speaker, text, created_at)",
-      "Table: call_requests(id, call_id, business_id, from_number, customer_name, customer_mobile, summary, request_type, status, approval_note, approved_at, messaged_to_customer, messaged_at, called_back, called_back_at, created_at, updated_at)",
-      "Important: products.status valid values are draft, available, reserved, sold, inactive. Never use status='active'.",
+      "Table: leads(id, business_id, call_id, product_id, customer_name, customer_phone, customer_email, lead_type, status, notes, summary, transcript, preferred_date, preferred_time, created_at, updated_at)",
+      "Table: orders(id, business_id, call_id, product_id, customer_name, customer_number, customer_email, status, summary, transcript, notes, reject_reason, preferred_date, preferred_time, accepted_at, rejected_at, created_at, updated_at)",
+      "Table: call_requests(id, call_id, business_id, product_id, from_number, customer_name, customer_mobile, customer_email, summary, transcript, request_type, status, approval_note, approved_at, messaged_to_customer, messaged_at, called_back, called_back_at, preferred_date, preferred_time, created_at, updated_at)",
+      "Important: products.status valid values are draft, active, available, reserved, sold, inactive.",
       "Important: for numeric compare/sort use NULLIF(regexp_replace(price::text, '[^0-9.]', '', 'g'), '')::numeric.",
       "Important: when user says values like 10 lakh, 10 lakhs, or 10 lakh 50 thousand, treat them as rupee integers (1000000, 1050000).",
     ].join("\n");
@@ -1558,7 +1572,11 @@ export class AiService {
       return false;
     }
 
-    if (!/( from businesses| from users| from products| from product_images| from calls| from call_turns| from call_requests)/i.test(normalized)) {
+    if (
+      !/( from businesses| from users| from business_settings| from categories| from products| from product_features| from product_images| from business_faqs| from calls| from call_turns| from leads| from orders| from call_requests)/i.test(
+        normalized,
+      )
+    ) {
       return false;
     }
 
@@ -1584,7 +1602,8 @@ export class AiService {
 
   private isBusinessScopedSql(query: string, businessId: string) {
     const normalized = query.toLowerCase().replace(/\s+/g, " ");
-    const scopedTablePattern = /\bfrom\s+(products|calls|call_requests|users)\b|\bjoin\s+(products|calls|call_requests|users)\b/i;
+    const scopedTablePattern =
+      /\bfrom\s+(products|product_features|product_images|calls|call_requests|leads|orders|users|business_settings|business_faqs)\b|\bjoin\s+(products|product_features|product_images|calls|call_requests|leads|orders|users|business_settings|business_faqs)\b/i;
     if (!scopedTablePattern.test(normalized)) {
       return true;
     }
@@ -2430,6 +2449,7 @@ export class AiService {
       `city: ${business.city ?? "not provided"}`,
       `state: ${business.state ?? "not provided"}`,
       `address: ${business.address ?? "not provided"}`,
+      `google_map_link: ${business.googleMapLink ?? "not provided"}`,
     ].join("\n");
   }
 

@@ -3,7 +3,10 @@ import { drizzle, PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import { configuration } from "../config/configuration";
-import * as schema from "./schema";
+import * as relations from "./relations";
+import * as tables from "./schema";
+
+const schema = { ...tables, ...relations };
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
