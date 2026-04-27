@@ -1,5 +1,5 @@
 import { ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 
 import { normalizePhoneNumber } from "../common/utils/phone.util";
 import { DatabaseService } from "../database/database.service";
@@ -163,21 +163,45 @@ export class BusinessesService {
   }
 
   async getByRoutingNumber(routingNumber: string) {
-    const normalizedRoutingNumber = normalizePhoneNumber(routingNumber);
-    const [business] = await this.database.db
+    const routingCandidates = this.buildPhoneLookupCandidates(routingNumber);
+    const rows = await this.database.db
       .select()
       .from(businesses)
       .where(
         or(
-          eq(businesses.contactNumber, routingNumber),
-          eq(businesses.contactNumber, normalizedRoutingNumber),
-          eq(businesses.primaryMobile, routingNumber),
-          eq(businesses.primaryMobile, normalizedRoutingNumber),
+          inArray(businesses.contactNumber, routingCandidates),
+          inArray(businesses.primaryMobile, routingCandidates),
+          inArray(businesses.forwardingNumber, routingCandidates),
+          inArray(businesses.aiAgentPhoneNumber, routingCandidates),
         ),
       )
-      .limit(1);
+      .limit(10);
 
-    return business ? this.toApiBusiness(business) : null;
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const exactBusinessNumberMatch = rows.find((row) => this.matchesLookupCandidates(row.contactNumber, routingCandidates));
+    if (exactBusinessNumberMatch) {
+      return this.toApiBusiness(exactBusinessNumberMatch);
+    }
+
+    const auxiliaryMatches = rows.filter(
+      (row) =>
+        this.matchesLookupCandidates(row.primaryMobile, routingCandidates) ||
+        this.matchesLookupCandidates(row.forwardingNumber, routingCandidates) ||
+        this.matchesLookupCandidates(row.aiAgentPhoneNumber, routingCandidates),
+    );
+
+    if (auxiliaryMatches.length === 1) {
+      return this.toApiBusiness(auxiliaryMatches[0]);
+    }
+
+    if (rows.length === 1) {
+      return this.toApiBusiness(rows[0]);
+    }
+
+    return null;
   }
 
   getAgentGreeting(business: ReturnType<BusinessesService["toApiBusiness"]>) {
@@ -247,5 +271,25 @@ export class BusinessesService {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
+  }
+
+  private buildPhoneLookupCandidates(phoneNumber: string) {
+    const normalized = normalizePhoneNumber(phoneNumber);
+    const digitsOnly = normalized.replace(/\D/g, "");
+    const withoutLeadingZero = digitsOnly.replace(/^0+/, "");
+    const withoutIndiaCode = withoutLeadingZero.startsWith("91") ? withoutLeadingZero.slice(2) : withoutLeadingZero;
+    const lastTenDigits = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
+
+    return Array.from(
+      new Set([phoneNumber, normalized, digitsOnly, withoutLeadingZero, withoutIndiaCode, lastTenDigits].filter(Boolean)),
+    );
+  }
+
+  private matchesLookupCandidates(value: string | null | undefined, candidates: string[]) {
+    if (!value) {
+      return false;
+    }
+
+    return this.buildPhoneLookupCandidates(value).some((candidate) => candidates.includes(candidate));
   }
 }

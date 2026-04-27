@@ -1,5 +1,4 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { eq, sql } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
@@ -59,20 +58,19 @@ export class AiService {
     @Inject(OpenAiProvider) private readonly openAiProvider: OpenAiProvider,
     @Inject(ElevenLabsProvider) private readonly elevenLabsProvider: ElevenLabsProvider,
     @Inject(DatabaseService) private readonly database: DatabaseService,
-    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
-  private async textToSpeech(text: string) {
-    const provider = this.config.get<string>("VOICE_PROVIDER") || "elevenlabs";
-    if (provider === "browser" || provider === "none") {
-      return { audioBase64: null, text };
-    }
-    const speech = await this.elevenLabsProvider.textToSpeech(text);
-    return speech;
-  }
-
-  async processCallTurn(business: CallBusinessContext, customerText: string, conversationContext = "") {
+  async processCallTurn(
+    business: CallBusinessContext,
+    customerText: string,
+    conversationContext = "",
+    options?: { ttsOutputFormat?: string },
+  ) {
+    this.logger.log(
+      `processCallTurn start businessId=${business.id} businessName="${business.name}" text="${this.truncateForLog(customerText)}" tts=${options?.ttsOutputFormat ?? "default"}`,
+    );
     const { context, inventory } = await this.getBusinessSnapshot(business.id);
+    this.logger.log(`business snapshot businessId=${business.id} inventory=${inventory.length}`);
     const functionRoutedReply = await this.tryFunctionRouterReply(
       business,
       customerText,
@@ -80,7 +78,10 @@ export class AiService {
       inventory,
     );
     if (functionRoutedReply) {
-      const speech = await this.textToSpeech(functionRoutedReply);
+      this.logger.log(`reply path=function-router businessId=${business.id}`);
+      const speech = await this.elevenLabsProvider.textToSpeech(functionRoutedReply, {
+        outputFormat: options?.ttsOutputFormat,
+      });
       return {
         inputText: customerText,
         replyText: functionRoutedReply,
@@ -92,7 +93,10 @@ export class AiService {
 
     const sqlAssistedReply = await this.trySqlDrivenReply(business, customerText, conversationContext);
     if (sqlAssistedReply) {
-      const speech = await this.textToSpeech(sqlAssistedReply);
+      this.logger.log(`reply path=sql-assisted businessId=${business.id}`);
+      const speech = await this.elevenLabsProvider.textToSpeech(sqlAssistedReply, {
+        outputFormat: options?.ttsOutputFormat,
+      });
       return {
         inputText: customerText,
         replyText: sqlAssistedReply,
@@ -101,9 +105,12 @@ export class AiService {
     }
 
     if (mustUseSql) {
+      this.logger.warn(`reply path=sql-required-fallback businessId=${business.id}`);
       const fallback =
         "I am unable to fetch live pricing details right now. Please try again in a moment, and I will share the exact inventory prices.";
-      const speech = await this.textToSpeech(fallback);
+      const speech = await this.elevenLabsProvider.textToSpeech(fallback, {
+        outputFormat: options?.ttsOutputFormat,
+      });
       return {
         inputText: customerText,
         replyText: fallback,
@@ -120,7 +127,10 @@ export class AiService {
     );
 
     if (groundedReply) {
-      const speech = await this.textToSpeech(groundedReply);
+      this.logger.log(`reply path=grounded businessId=${business.id}`);
+      const speech = await this.elevenLabsProvider.textToSpeech(groundedReply, {
+        outputFormat: options?.ttsOutputFormat,
+      });
       return {
         inputText: customerText,
         replyText: groundedReply,
@@ -138,22 +148,29 @@ export class AiService {
       "Keep response short and phone-call friendly.",
       "Never restart with a fresh greeting in the middle of an ongoing call.",
       "For INR prices, speak naturally using Indian units like lakh and thousand.",
-      "For payments, always tell the customer: 'For payment, please visit our store.' Never ask about payment methods or process payments over the phone.",
-      "For bookings, you must always collect both the customer's full name and their 10-digit mobile number. If the number is not exactly 10 digits, ask them to provide a valid 10-digit number.",
       "Conversation so far:\n" + (conversationContext || "No prior turns"),
       "Business profile:\n" + this.buildBusinessProfileText(business),
       "Inventory summary:\n" + this.buildInventoryContext(inventory),
       "FAQ/Services context:\n" + this.buildRelevantKnowledgeContext(customerText, context),
     ].join("\n\n");
 
+    this.logger.log(`reply path=groq-chat businessId=${business.id}`);
     const reply = await this.openAiProvider.generateReply(systemPrompt, customerText);
-    const speech = await this.textToSpeech(reply.text);
+    const speech = await this.elevenLabsProvider.textToSpeech(reply.text, {
+      outputFormat: options?.ttsOutputFormat,
+    });
 
     return {
       inputText: customerText,
       replyText: reply.text,
       audioBase64: speech.audioBase64,
     };
+  }
+
+  async textToSpeech(text: string, options?: { ttsOutputFormat?: string }) {
+    return this.elevenLabsProvider.textToSpeech(text, {
+      outputFormat: options?.ttsOutputFormat,
+    });
   }
 
   private async getBusinessSnapshot(businessId: string) {
@@ -178,6 +195,10 @@ export class AiService {
     });
 
     return { context, inventory };
+  }
+
+  private truncateForLog(value: string, maxLength = 160) {
+    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
 
   extractLeadData(transcript: string) {
@@ -500,10 +521,6 @@ export class AiService {
       return `Sure, we offer ${serviceNames.slice(0, 8).join(", ")}. Tell me which one you'd like details on.`;
     }
 
-    if (/\b(pay|payment|paying)\b/.test(text)) {
-      return "For payment, please visit our store. We do not process payments over the phone.";
-    }
-
     return null;
   }
 
@@ -596,7 +613,6 @@ export class AiService {
     const deterministicSql = this.buildDeterministicSqlFallback(business.id, enrichedQuery, conversationContext, {
       forcedLimit,
       forceRemainingAll: forceAllRemaining,
-      routeData: route.data,
     });
     this.logger.log(`[FUNCTION_FLOW] Function 1 SQL: ${deterministicSql ?? "<null>"}`);
 
@@ -1066,16 +1082,6 @@ export class AiService {
       "ascending",
       "descending",
       "order",
-      "india",
-      "indian",
-      "the",
-      "your",
-      "my",
-      "our",
-      "some",
-      "total",
-      "all",
-      "any",
     ]);
 
     const tokens = cleaned.split(" ").filter((token) => token && !stopWords.has(token));
@@ -1309,7 +1315,6 @@ export class AiService {
     options?: {
       forcedLimit?: number;
       forceRemainingAll?: boolean;
-      routeData?: Record<string, unknown>;
     },
   ) {
     const parsedBusinessId = Number(businessId);
@@ -1334,17 +1339,6 @@ export class AiService {
 
     const carsOnly = /\b(car|cars)\b/.test(text) || !!priorConstraints?.carsOnly;
     const budgetRange = (() => {
-      if (options?.routeData) {
-        const min = Number(options.routeData.minPriceInr);
-        const max = Number(options.routeData.maxPriceInr);
-        if (Number.isFinite(min) || Number.isFinite(max)) {
-          return { 
-            min: Number.isFinite(min) ? min : null, 
-            max: Number.isFinite(max) ? max : null 
-          };
-        }
-      }
-      
       const fromText = this.extractBudgetRangeInInr(text);
       if (fromText.min !== null || fromText.max !== null) {
         return fromText;
@@ -1395,22 +1389,22 @@ export class AiService {
 
     if (countIntent) {
       const countWhere = whereClauses.filter((clause) => !clause.includes("IS NOT NULL"));
-      const countSql = [
+      return [
         "select count(*)::int as total_count",
         "from products",
         `where ${countWhere.join(" and ")}`,
       ].join(" ");
-      this.logger.log(`[SQL_FALLBACK] Generated count SQL: ${countSql}`);
-      return countSql;
     }
 
     const standardPageSize = this.extractRequestedLimit(text) ?? 5;
     const requestedLimit = options?.forcedLimit ?? standardPageSize;
-    // For lists, fetch a large batch to allow for in-memory distinct filtering
-    const pageSize = (listIntent || remainingIntent) ? 500 : Math.max(1, Math.min(requestedLimit, 20));
-    const offset = 0; // We handle pagination in-memory for the distinct list
+    const limitCeiling = options?.forceRemainingAll ? 500 : 20;
+    const pageSize = Math.max(1, Math.min(requestedLimit, limitCeiling));
+    const priorRemainingRequests = this.countPriorRemainingRequests(conversationContext, customerText);
+    const offsetChunkSize = options?.forceRemainingAll ? standardPageSize : pageSize;
+    const offset = remainingIntent ? (priorRemainingRequests + 1) * offsetChunkSize : 0;
 
-    const sqlQuery = [
+    return [
       "select id, name, brand, model, variant, category, status, price, currency, fuel_type, transmission, location_city, count(*) over() as total_matches",
       "from products",
       `where ${whereClauses.join(" and ")}`,
@@ -1418,9 +1412,6 @@ export class AiService {
       `limit ${pageSize}`,
       offset > 0 ? `offset ${offset}` : "",
     ].join(" ");
-
-    this.logger.log(`[SQL_FALLBACK] Generated SQL: ${sqlQuery}`);
-    return sqlQuery;
   }
 
   private async tryFixedSqlReply(business: CallBusinessContext, customerText: string) {
@@ -1695,16 +1686,14 @@ export class AiService {
 
   private hasExplicitQueryConstraints(text: string) {
     const budget = this.extractBudgetRangeInInr(text);
-    const fuel = this.extractFuelType(text);
-    const trans = this.extractTransmissionType(text);
-    const city = this.extractLocationCity(text);
-    const suv = /\bsuv\b/.test(text);
-
-    if (budget.min !== null || budget.max !== null || fuel || trans || city || suv) {
-      this.logger.log(`[CONSTRAINTS] Found: budget=${JSON.stringify(budget)}, fuel=${fuel}, trans=${trans}, city=${city}, suv=${suv}`);
-      return true;
-    }
-    return false;
+    return (
+      budget.min !== null ||
+      budget.max !== null ||
+      !!this.extractFuelType(text) ||
+      !!this.extractTransmissionType(text) ||
+      !!this.extractLocationCity(text) ||
+      /\bsuv\b/.test(text)
+    );
   }
 
   private rowsSatisfyExplicitFilters(rows: unknown[], customerText: string) {
@@ -1828,8 +1817,6 @@ export class AiService {
     const listIntent = this.isListIntent(customerText) || this.isImplicitListIntent(customerText);
     const remainingIntent = this.isRemainingIntent(customerText);
 
-    this.logger.log(`[SQL_REPLY] text="${text}" countIntent=${countIntent} listIntent=${listIntent} rows=${(rows as any[]).length}`);
-
     if (countIntent) {
       const count = this.extractCountFromRows(rows);
       if (count !== null) {
@@ -1843,30 +1830,25 @@ export class AiService {
     }
 
     if (listIntent || remainingIntent) {
-      const baseItems = this.pickDistinctRowsByModel(
-        rows
-          .map((row) => row as Record<string, unknown>)
-          .filter((row) => typeof row.name === "string" && typeof row.price !== "undefined")
-          .sort((a, b) => Number(a.price) - Number(b.price)),
-      );
+      const baseItems = rows
+        .map((row) => row as Record<string, unknown>)
+        .filter((row) => typeof row.name === "string" && typeof row.price !== "undefined")
+        .sort((a, b) => Number(a.price) - Number(b.price));
 
-      const allItems = this.filterRowsForDisplay(baseItems, text);
-      if (allItems.length === 0) {
+      const items = this.filterRowsForDisplay(baseItems, text);
+      if (items.length === 0) {
         return "No matching records were found. If you want, I can suggest nearby price options.";
       }
 
-      const pageSize = 5;
-      const priorRemainingRequests = this.countPriorRemainingRequests(conversationContext, customerText);
-      const alreadyShownCount = remainingIntent ? (priorRemainingRequests + 1) * pageSize : 0;
-      
-      const selected = allItems.slice(alreadyShownCount, alreadyShownCount + pageSize);
-      if (selected.length === 0) {
-        return remainingIntent 
-          ? "I have already shown you all the matching cars in this range."
-          : "No matching records were found.";
-      }
-
-      const totalMatches = allItems.length;
+      const selected = items.slice(0, 5);
+      const first = items[0];
+      const totalMatchesRaw = first?.total_matches;
+      const totalMatches =
+        typeof totalMatchesRaw === "number"
+          ? Math.trunc(totalMatchesRaw)
+          : typeof totalMatchesRaw === "string" && /^\d+$/.test(totalMatchesRaw)
+            ? Number(totalMatchesRaw)
+            : items.length;
 
       const top = selected.map((row) => {
         const name = this.sanitizeNameForRequestedFilters(String(row.name), text);
@@ -1875,19 +1857,13 @@ export class AiService {
         return `${name} at about ${this.formatCurrencyForSpeech(price, currency)}`;
       });
 
-      const totalPhysicalMatches = rows.length;
-      const remainingCount = Math.max(0, totalMatches - alreadyShownCount - selected.length);
-      const remainingPhysicalCount = Math.max(0, totalPhysicalMatches - alreadyShownCount - selected.length);
-      
+      const alreadyShown = remainingIntent
+        ? (this.countPriorRemainingRequests(conversationContext, customerText) + 1) * 5
+        : 0;
+      const remainingCount = Math.max(0, totalMatches - alreadyShown - selected.length);
       const prefix = remainingIntent ? "Here are more matching cars" : "Here are the matching cars";
-      if (remainingCount > 0 || remainingPhysicalCount > 0) {
-        let moreText = "";
-        if (remainingCount > 0) {
-          moreText = `There are ${remainingCount} more models and about ${remainingPhysicalCount} more cars in total.`;
-        } else {
-          moreText = `There are about ${remainingPhysicalCount} more variants of these models available.`;
-        }
-        return `${prefix}: ${top.join(", ")}. ${moreText} Would you like me to list the remaining cars as well?`;
+      if (remainingCount > 0) {
+        return `${prefix}: ${top.join(", ")}. There are ${remainingCount} more cars in this range. Would you like me to list the remaining cars as well?`;
       }
 
       return `${prefix}: ${top.join(", ")}.`;
@@ -1970,8 +1946,7 @@ export class AiService {
     }
 
     const normalized = cityMatch[1].trim().replace(/\s+/g, " ");
-    this.logger.log(`[CITY_EXTRACT] Raw match: "${cityMatch[1]}" Normalized: "${normalized}"`);
-    if (/(inventory|price|range|cars|car|lakhs|lakh|rupees|ascending|descending|order|sorted|remaining|next|same|that|this|the|your|my|our|some|stock|suv|petrol|diesel|automatic|manual|fuel|transmission|india|indian|total|all|any)/i.test(normalized)) {
+    if (/(inventory|price|range|cars|car|lakhs|lakh|rupees|ascending|descending|order|sorted|remaining|next|same|that|this|stock|suv|petrol|diesel|automatic|manual|fuel|transmission)/i.test(normalized)) {
       return null;
     }
 
@@ -2108,28 +2083,29 @@ export class AiService {
     const seen = new Set<string>();
     const result: Array<Record<string, unknown>> = [];
 
-    // First pass: Pick one of each model
     for (const row of rows) {
       const brand = typeof row.brand === "string" ? row.brand : "";
       const model = typeof row.model === "string" ? row.model : "";
-      const signature = [brand, model].join("|").toLowerCase().trim();
+      const variant = typeof row.variant === "string" ? row.variant : "";
+      const name = typeof row.name === "string" ? row.name : "";
 
-      if (!signature || seen.has(signature)) continue;
-      seen.add(signature);
-      result.push(row);
-      if (result.length >= 10) break; 
-    }
+      const signature = [brand, model, variant]
+        .join("|")
+        .toLowerCase()
+        .trim();
+      const fallback = name
+        .toLowerCase()
+        .replace(/\b(19|20)\d{2}\b/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const key = signature || fallback;
 
-    // Second pass: If we have fewer than 5 items, add variants (different years/names)
-    if (result.length < 5) {
-      const seenFull = new Set(result.map(r => String(r.name).toLowerCase().trim()));
-      for (const row of rows) {
-        const name = String(row.name).toLowerCase().trim();
-        if (seenFull.has(name)) continue;
-        seenFull.add(name);
-        result.push(row);
-        if (result.length >= 10) break;
+      if (!key || seen.has(key)) {
+        continue;
       }
+
+      seen.add(key);
+      result.push(row);
     }
 
     return result;
@@ -2286,8 +2262,7 @@ export class AiService {
   }
 
   private extractValidIndianMobile(input: string) {
-    const normalized = this.normalizeSpokenDigits(input);
-    const matches = normalized.match(/[\d\s-()+]{8,}/g) ?? [];
+    const matches = input.match(/[\d\s-()+]{8,}/g) ?? [];
     for (const raw of matches) {
       const digits = raw.replace(/\D/g, "");
       if (digits.length === 10) {
@@ -2304,70 +2279,20 @@ export class AiService {
     return null;
   }
 
-  private normalizeSpokenDigits(text: string) {
-    let normalized = text.toLowerCase();
-    const map: Record<string, string> = {
-      zero: "0",
-      one: "1",
-      two: "2",
-      three: "3",
-      four: "4",
-      five: "5",
-      six: "6",
-      seven: "7",
-      eight: "8",
-      nine: "9",
-    };
-
-    // Handle "double X" and "triple X"
-    normalized = normalized.replace(/\bdouble\s+(zero|one|two|three|four|five|six|seven|eight|nine)\b/g, (m, p1) => map[p1] + map[p1]);
-    normalized = normalized.replace(/\btriple\s+(zero|one|two|three|four|five|six|seven|eight|nine)\b/g, (m, p1) => map[p1] + map[p1] + map[p1]);
-
-    // Replace single words
-    Object.keys(map).forEach((word) => {
-      normalized = normalized.replace(new RegExp(`\\b${word}\\b`, "g"), map[word]);
-    });
-
-    return normalized;
-  }
-
   private extractCustomerName(input: string) {
-    const normalizedInput = input.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-    
-    // Pattern 1: Explicit introduction
-    const explicitPattern = /(?:my name is|i am|this is)\s+([a-z][a-z\s'-]{1,60})/i;
-    const explicitMatch = normalizedInput.match(explicitPattern);
-    if (explicitMatch?.[1]) {
-      return this.cleanAndCapitalizeName(explicitMatch[1]);
+    const normalizedInput = input.replace(/\r?\n/g, " ");
+    const pattern = /(?:my name is|i am|this is)\s+([a-z][a-z\s'-]{1,60})/i;
+    const match = normalizedInput.match(pattern);
+    if (!match?.[1]) {
+      return null;
     }
 
-    // Pattern 2: Customer reply in conversation context after an agent prompt for name
-    const contextualPattern = /(?:share your full name|what is your name|your name please)[\s\S]*?customer:\s*([a-z][a-z\s'-]{1,40})(?:\b|$)/i;
-    const contextualMatch = input.match(contextualPattern);
-    if (contextualMatch?.[1]) {
-      return this.cleanAndCapitalizeName(contextualMatch[1]);
-    }
-
-    // Pattern 3: Standalone name (risky but useful for direct replies)
-    // Only use this if the input is short and looks like a name
-    if (normalizedInput.split(" ").length <= 4 && /^[a-z\s'-]+$/i.test(normalizedInput)) {
-      // Avoid common filler words
-      if (!/^(yes|no|ok|sure|thanks?|hello|hi|hey|please|booking|cars?)$/i.test(normalizedInput)) {
-        return this.cleanAndCapitalizeName(normalizedInput);
-      }
-    }
-
-    return null;
-  }
-
-  private cleanAndCapitalizeName(raw: string) {
-    const cleaned = raw
+    const cleaned = match[1]
       .replace(/\b(agent|customer)\b[\s\S]*$/i, "")
       .split(/\b(and|my mobile|phone number|mobile number|contact number)\b/i)[0]
       .trim()
       .replace(/[.!,;:]+$/g, "")
       .replace(/\s+/g, " ");
-      
     if (cleaned.length < 2) {
       return null;
     }

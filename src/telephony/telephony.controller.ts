@@ -9,6 +9,7 @@ import {
   Param,
   Post,
   Query,
+  Req,
   UploadedFile,
   UseInterceptors,
   ValidationPipe,
@@ -22,6 +23,8 @@ import type { JwtUser } from "../auth/types/jwt-user.type";
 import { BusinessesService } from "../businesses/businesses.service";
 import { CallsService } from "../calls/calls.service";
 import { CompleteCallDto } from "./dto/complete-call.dto";
+import { ConnectExotelCallDto } from "./dto/connect-exotel-call.dto";
+import { ConnectExotelAppCallDto } from "./dto/connect-exotel-app-call.dto";
 import { ExotelCallWebhookDto } from "./dto/exotel-call-webhook.dto";
 import { PublicTestCallTurnDto } from "./dto/public-test-call-turn.dto";
 import { ProcessAgentTurnDto } from "./dto/process-agent-turn.dto";
@@ -30,6 +33,7 @@ import { StartTestCallDto } from "./dto/start-test-call.dto";
 import { TestCallCompleteDto } from "./dto/test-call-complete.dto";
 import { TestCallTurnDto } from "./dto/test-call-turn.dto";
 import { TelephonyService } from "./telephony.service";
+import type { Request } from "express";
 
 @ApiTags("Telephony")
 @Controller("telephony")
@@ -260,9 +264,80 @@ export class TelephonyController {
     return this.telephonyService.handleIncomingWebhook(dto, headerSecret ?? querySecret);
   }
 
+  @Public()
+  @Get("webhooks/exotel/incoming-call")
+  incomingCallGet(
+    @Query() query: ExotelCallWebhookDto,
+    @Headers("x-webhook-secret") headerSecret?: string,
+    @Query("secret") querySecret?: string,
+  ) {
+    return this.telephonyService.handleIncomingWebhook(query, headerSecret ?? querySecret);
+  }
+
+  @Public()
+  @Get("voicebot/session")
+  voicebotSession(@Req() request: Request) {
+    const host = request.get("x-forwarded-host") ?? request.get("host") ?? "";
+    const proto = request.get("x-forwarded-proto") ?? request.protocol ?? "https";
+    const wsProtocol = proto === "http" ? "ws" : "wss";
+
+    return {
+      url: `${wsProtocol}://${host}/api/telephony/voicebot/media?sample-rate=16000`,
+    };
+  }
+
+  @Public()
+  @Get("greeting/test")
+  @Header("Content-Type", "text/plain; charset=utf-8")
+  async voicebotGreetingTest(@Query() query: ExotelCallWebhookDto) {
+    const callerNumber = this.firstString([
+      query.From,
+      this.readField(query, ["CallFrom", "call_from", "From", "from", "Caller", "caller", "CallerNumber", "caller_number"]),
+    ]);
+    const dialedNumber = this.firstString([
+      query.DialWhomNumber,
+      query.To,
+      this.readField(query, ["DialWhomNumber", "dial_whom_number", "To", "to", "Called", "called", "ToNumber", "to_number"]),
+    ]);
+
+    const business =
+      (callerNumber ? await this.businessesService.getByRoutingNumber(callerNumber) : null) ??
+      (dialedNumber ? await this.businessesService.getByRoutingNumber(dialedNumber) : null);
+
+    if (business) {
+      return this.businessesService.getAgentGreeting(business);
+    }
+
+    return "Hello. Please wait while we connect your call.";
+  }
+
   @Post("calls/:callId/agent-turn")
   processAgentTurn(@Param("callId") callId: string, @Body() dto: ProcessAgentTurnDto) {
     return this.telephonyService.processAgentTurn(callId, dto.customerText);
+  }
+
+  @ApiBearerAuth()
+  @Post("exotel/connect")
+  connectExotelCall(@Body() dto: ConnectExotelCallDto) {
+    return this.telephonyService.connectExotelCall({
+      fromNumber: dto.fromNumber,
+      toNumber: dto.toNumber,
+      callerId: dto.callerId,
+      statusCallbackUrl: dto.statusCallbackUrl,
+      record: dto.record,
+    });
+  }
+
+  @ApiBearerAuth()
+  @Post("exotel/connect-to-app")
+  connectExotelAppCall(@Body() dto: ConnectExotelAppCallDto) {
+    return this.telephonyService.connectExotelCallToApp({
+      customerNumber: dto.customerNumber,
+      appUrl: dto.appUrl,
+      callerId: dto.callerId,
+      statusCallbackUrl: dto.statusCallbackUrl,
+      customField: dto.customField,
+    });
   }
 
   @Public()
@@ -379,5 +454,26 @@ export class TelephonyController {
       transcript: body.transcript,
       customerPhone: body.customerPhone,
     });
+  }
+
+  private readField(payload: Record<string, unknown>, keys: string[]) {
+    for (const key of keys) {
+      const value = payload[key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+
+    return undefined;
+  }
+
+  private firstString(values: Array<string | undefined>) {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+
+    return undefined;
   }
 }

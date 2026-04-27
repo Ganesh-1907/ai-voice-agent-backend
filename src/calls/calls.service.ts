@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { and, desc, eq } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
@@ -40,7 +41,7 @@ export class CallsService {
     const [created] = await this.database.db
       .insert(calls)
       .values({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         businessId: Number(input.businessId),
         exotelCallSid: input.exotelCallSid,
         fromNumber: input.fromNumber,

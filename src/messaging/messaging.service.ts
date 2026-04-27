@@ -1,5 +1,6 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { NotFoundException } from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
@@ -30,7 +31,7 @@ export class MessagingService {
     const metadata = { ...((row.metadata ?? {}) as Record<string, unknown>) };
     const existingMessages = Array.isArray(metadata.messages) ? metadata.messages : [];
     const message = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       businessId,
       leadId: dto.leadId,
       callId: dto.callId,

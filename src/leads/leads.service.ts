@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
@@ -29,7 +30,7 @@ export class LeadsService {
     const now = new Date().toISOString();
 
     const lead: LeadItem = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       businessId,
       callId,
       name: dto.name,

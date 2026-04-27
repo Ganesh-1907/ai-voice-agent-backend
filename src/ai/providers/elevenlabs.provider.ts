@@ -8,11 +8,13 @@ export class ElevenLabsProvider {
 
   constructor(@Inject(ConfigService) private readonly configService: ConfigService) {}
 
-  async textToSpeech(text: string) {
+  async textToSpeech(text: string, options?: { outputFormat?: string }) {
     const apiKey = this.configService.get<string>("ELEVENLABS_API_KEY");
     const voiceId = this.configService.get<string>("ELEVENLABS_VOICE_ID");
+    const outputFormat = options?.outputFormat ?? "mp3_44100_128";
 
     if (this.ttsTemporarilyDisabled) {
+      this.logger.warn("ElevenLabs TTS skipped because it is temporarily disabled in this process");
       return {
         audioBase64: null,
         text,
@@ -28,7 +30,11 @@ export class ElevenLabsProvider {
     }
 
     try {
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      const startedAt = Date.now();
+      this.logger.log(
+        `ElevenLabs TTS request voiceId=${voiceId} outputFormat=${outputFormat} textChars=${text.length}`,
+      );
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${outputFormat}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -41,11 +47,14 @@ export class ElevenLabsProvider {
       });
 
       if (!response.ok) {
+        const rawBody = await response.text().catch(() => "");
         if (response.status === 401 || response.status === 402 || response.status === 403) {
           this.ttsTemporarilyDisabled = true;
-          this.logger.warn(`ElevenLabs disabled for this process due to status ${response.status}`);
+          this.logger.warn(
+            `ElevenLabs disabled for this process due to status ${response.status}: ${this.truncate(rawBody)}`,
+          );
         } else {
-          this.logger.error(`ElevenLabs TTS failed with status ${response.status}`);
+          this.logger.error(`ElevenLabs TTS failed with status ${response.status}: ${this.truncate(rawBody)}`);
         }
 
         return {
@@ -55,6 +64,9 @@ export class ElevenLabsProvider {
       }
 
       const buffer = Buffer.from(await response.arrayBuffer());
+      this.logger.log(
+        `ElevenLabs TTS success status=${response.status} contentType=${response.headers.get("content-type") ?? "unknown"} bytes=${buffer.length} durationMs=${Date.now() - startedAt}`,
+      );
 
       return {
         audioBase64: buffer.toString("base64"),
@@ -68,5 +80,9 @@ export class ElevenLabsProvider {
         text,
       };
     }
+  }
+
+  private truncate(value: string, maxLength = 300) {
+    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
 }

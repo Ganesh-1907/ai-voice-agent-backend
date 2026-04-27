@@ -6,6 +6,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 
 import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
+import { VoicebotWebSocketService } from "./telephony/voicebot-websocket.service";
 
 async function bootstrap() {
   const logger = new Logger("Bootstrap");
@@ -39,6 +40,7 @@ async function bootstrap() {
 
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
+  app.get(VoicebotWebSocketService).attach(app.getHttpServer());
 }
 
 void bootstrap();

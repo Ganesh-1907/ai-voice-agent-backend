@@ -256,6 +256,10 @@ export class OpenAiProvider {
 
       while (attempt < maxAttempts) {
         attempt += 1;
+        const startedAt = Date.now();
+        this.logger.log(
+          `Groq transcribeAudio request attempt=${attempt} model=${model} bytes=${input.buffer.length} mime=${input.mimeType}`,
+        );
 
         const formData = new FormData();
         const audioBlob = new Blob([new Uint8Array(input.buffer)], {
@@ -281,6 +285,9 @@ export class OpenAiProvider {
             duration?: number;
             segments?: Array<{ start: number; end: number; text: string }>;
           };
+          this.logger.log(
+            `Groq transcribeAudio success attempt=${attempt} status=${response.status} durationMs=${Date.now() - startedAt} textChars=${typeof payload.text === "string" ? payload.text.length : 0}`,
+          );
 
           return {
             text: typeof payload.text === "string" ? payload.text.trim() : "",
@@ -291,6 +298,9 @@ export class OpenAiProvider {
         }
 
         const errorBody = (await response.text().catch(() => "")).trim();
+        this.logger.warn(
+          `Groq transcribeAudio non-ok attempt=${attempt} status=${response.status} durationMs=${Date.now() - startedAt} body=${this.truncateForLog(errorBody)}`,
+        );
 
         if (response.status === 429 && attempt < maxAttempts) {
           this.logger.warn("Groq transcription rate-limited; retrying once");
@@ -362,11 +372,17 @@ export class OpenAiProvider {
             const payload = (await response.json()) as {
               choices?: Array<{ message?: { content?: string } }>;
             };
+            this.logger.log(
+              `Groq ${input.featureLabel} success model=${currentModel} attempt=${attempt} status=${response.status} textChars=${payload.choices?.[0]?.message?.content?.length ?? 0}`,
+            );
 
             return payload.choices?.[0]?.message?.content;
           }
 
           const errorBody = (await response.text().catch(() => "")).trim();
+          this.logger.warn(
+            `Groq ${input.featureLabel} non-ok model=${currentModel} attempt=${attempt} status=${response.status} body=${this.truncateForLog(errorBody)}`,
+          );
 
           if (response.status === 429 && attempt < maxAttempts) {
             if (input.featureLabel === "generateSqlQuery") {
@@ -540,5 +556,9 @@ export class OpenAiProvider {
     }
 
     return text.slice(firstBrace, lastBrace + 1);
+  }
+
+  private truncateForLog(value: string, maxLength = 300) {
+    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
 }

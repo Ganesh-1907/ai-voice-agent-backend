@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
@@ -36,7 +37,7 @@ export class KnowledgeBaseService {
     const now = new Date().toISOString();
 
     const faq: FaqItem = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       businessId,
       question: dto.question,
       answer: dto.answer,
@@ -70,7 +71,7 @@ export class KnowledgeBaseService {
     const now = new Date().toISOString();
 
     const service: ServiceItem = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       businessId,
       title: dto.title,
       content: dto.content,

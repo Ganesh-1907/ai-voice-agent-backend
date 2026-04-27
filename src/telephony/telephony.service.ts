@@ -179,6 +179,26 @@ export class TelephonyService {
     };
   }
 
+  connectExotelCall(input: {
+    fromNumber: string;
+    toNumber: string;
+    callerId?: string;
+    statusCallbackUrl?: string;
+    record?: boolean;
+  }) {
+    return this.exotelProvider.connectTwoNumbers(input);
+  }
+
+  connectExotelCallToApp(input: {
+    customerNumber: string;
+    appUrl?: string;
+    callerId?: string;
+    statusCallbackUrl?: string;
+    customField?: string;
+  }) {
+    return this.exotelProvider.connectCustomerToApp(input);
+  }
+
   async completeTestCall(callId: string, body: TestCallCompleteDto) {
     const call = await this.callsService.getByIdOrFail(callId);
     const transcript = await this.callsService.buildTranscriptFromMeta(call);
@@ -281,27 +301,35 @@ export class TelephonyService {
   }
 
   private resolveRoutingNumber(dto: ExotelCallWebhookDto) {
-    return (
-      this.firstString([
-        dto.OriginalBusinessNumber,
-        dto.OriginalCalledNumber,
-        dto.CalledNumber,
-        dto.DialWhomNumber,
-        this.readField(dto, [
-          "OriginalBusinessNumber",
-          "OriginalCalledNumber",
-          "CalledNumber",
-          "DialWhomNumber",
-          "original_business_number",
-          "original_called_number",
-          "called_number",
-          "dial_whom_number",
-          "destination",
-          "Destination",
-        ]),
-        this.resolveToNumber(dto),
-      ]) ?? null
-    );
+    const explicitBusinessNumber = this.firstString([
+      dto.OriginalBusinessNumber,
+      dto.OriginalCalledNumber,
+      dto.CalledNumber,
+      dto.DialWhomNumber,
+      this.readField(dto, [
+        "OriginalBusinessNumber",
+        "OriginalCalledNumber",
+        "CalledNumber",
+        "DialWhomNumber",
+        "original_business_number",
+        "original_called_number",
+        "called_number",
+        "dial_whom_number",
+        "destination",
+        "Destination",
+      ]),
+    ]);
+
+    if (explicitBusinessNumber) {
+      return explicitBusinessNumber;
+    }
+
+    const toNumber = this.resolveToNumber(dto);
+    if (toNumber && this.isCentralAgentNumber(toNumber)) {
+      return toNumber;
+    }
+
+    return toNumber ?? this.resolveCustomerNumber(dto) ?? null;
   }
 
   private resolveCallSid(dto: ExotelCallWebhookDto) {
@@ -313,6 +341,7 @@ export class TelephonyService {
 
   private resolveCustomerNumber(dto: ExotelCallWebhookDto) {
     return this.firstString([
+      this.readField(dto, ["CallFrom", "call_from"]),
       dto.From,
       this.readField(dto, ["From", "from", "Caller", "caller", "CallerNumber", "caller_number"]),
     ]);
@@ -320,6 +349,7 @@ export class TelephonyService {
 
   private resolveToNumber(dto: ExotelCallWebhookDto) {
     return this.firstString([
+      this.readField(dto, ["CallTo", "call_to"]),
       dto.To,
       this.readField(dto, ["To", "to", "Called", "called", "ToNumber", "to_number"]),
     ]);
@@ -375,5 +405,23 @@ export class TelephonyService {
     }
 
     return undefined;
+  }
+
+  private isCentralAgentNumber(phoneNumber: string) {
+    const configuredNumbers = [
+      this.configService.get<string>("CENTRAL_AGENT_NUMBER"),
+      this.configService.get<string>("EXOTEL_VIRTUAL_NUMBER"),
+      this.configService.get<string>("EXOTEL_CALLER_ID"),
+    ];
+
+    const incomingDigits = phoneNumber.replace(/\D/g, "").replace(/^0+/, "");
+    return configuredNumbers.some((configured) => {
+      if (!configured) {
+        return false;
+      }
+
+      const configuredDigits = configured.replace(/\D/g, "").replace(/^0+/, "");
+      return incomingDigits === configuredDigits || incomingDigits.endsWith(configuredDigits) || configuredDigits.endsWith(incomingDigits);
+    });
   }
 }

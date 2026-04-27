@@ -8,10 +8,12 @@ import { UpdatesModule } from "../updates/updates.module";
 import { TelephonyController } from "./telephony.controller";
 import { TelephonyService } from "./telephony.service";
 import { ExotelProvider } from "./providers/exotel.provider";
+import { VoicebotWebSocketService } from "./voicebot-websocket.service";
 
 @Module({
   imports: [BusinessesModule, CallsModule, AiModule, LeadsModule, UpdatesModule],
   controllers: [TelephonyController],
-  providers: [TelephonyService, ExotelProvider],
+  providers: [TelephonyService, ExotelProvider, VoicebotWebSocketService],
+  exports: [VoicebotWebSocketService],
 })
 export class TelephonyModule {}
