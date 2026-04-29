@@ -64,13 +64,7 @@ export class UsersService {
       .where(eq(users.email, email.toLowerCase()))
       .limit(1);
 
-    return user
-      ? {
-          ...user,
-          id: String(user.id),
-          businessId: String(user.businessId),
-        }
-      : null;
+    return user ? this.mapUser(user) : null;
   }
 
   async findByIdOrFail(id: string) {
@@ -80,11 +74,7 @@ export class UsersService {
       throw new NotFoundException("User not found");
     }
 
-    return {
-      ...user,
-      id: String(user.id),
-      businessId: String(user.businessId),
-    };
+    return this.mapUser(user);
   }
 
   async listByBusiness(businessId: string) {
@@ -94,11 +84,7 @@ export class UsersService {
       .where(eq(users.businessId, Number(businessId)))
       .orderBy(desc(users.createdAt));
 
-    return rows.map((row) => ({
-      ...row,
-      id: String(row.id),
-      businessId: String(row.businessId),
-    }));
+    return rows.map((row) => this.mapUser(row));
   }
 
   async resetPasswordByEmail(email: string, passwordHash: string) {
@@ -141,5 +127,13 @@ export class UsersService {
   private buildSyntheticPhone() {
     const suffix = String(Date.now()).slice(-9);
     return `9${suffix}`;
+  }
+
+  private mapUser(row: typeof users.$inferSelect) {
+    return {
+      ...row,
+      id: String(row.id),
+      businessId: row.businessId === null ? null : String(row.businessId),
+    };
   }
 }

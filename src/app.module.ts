@@ -17,6 +17,7 @@ import { TelephonyModule } from "./telephony/telephony.module";
 import { CallsModule } from "./calls/calls.module";
 import { ProductsModule } from "./products/products.module";
 import { UpdatesModule } from "./updates/updates.module";
+import { UiModule } from "./ui/ui.module";
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { UpdatesModule } from "./updates/updates.module";
     PlansModule,
     ProductsModule,
     UpdatesModule,
+    UiModule,
   ],
   providers: [
     {

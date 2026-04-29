@@ -19,16 +19,19 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     const passwordHash = await bcrypt.hash(dto.password, 10);
-    const user = await this.usersService.create({
+    const createdUser = await this.usersService.create({
       name: dto.name,
       email: dto.email,
       passwordHash,
     });
+    const user = await this.usersService.findByIdOrFail(createdUser.id);
 
     return this.issueToken({
       sub: user.id,
       email: user.email,
       name: user.name,
+      role: user.role,
+      businessId: user.businessId,
     });
   }
 
@@ -47,6 +50,8 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       name: user.name,
+      role: user.role,
+      businessId: user.businessId,
     });
   }
 
@@ -56,6 +61,9 @@ export class AuthService {
       id: user.id,
       name: user.name,
       email: user.email,
+      role: user.role,
+      businessId: user.businessId,
+      phone: user.mobile ?? null,
       createdAt: user.createdAt,
     };
   }
@@ -83,12 +91,22 @@ export class AuthService {
   }
 
   private issueToken(payload: JwtUser) {
+    const tokenPayload: JwtUser = {
+      sub: payload.sub,
+      email: payload.email,
+      name: payload.name,
+      role: payload.role,
+      businessId: payload.businessId ?? null,
+    };
+
     return {
-      accessToken: this.jwtService.sign(payload),
+      accessToken: this.jwtService.sign(tokenPayload),
       user: {
         id: payload.sub,
         email: payload.email,
         name: payload.name,
+        role: payload.role,
+        businessId: payload.businessId ?? null,
       },
     };
   }
