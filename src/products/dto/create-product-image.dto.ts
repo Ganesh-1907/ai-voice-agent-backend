@@ -1,10 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsBoolean, IsInt, IsOptional, IsString, IsUrl, Min } from "class-validator";
+import { IsBoolean, IsInt, IsOptional, IsString, Matches, Min } from "class-validator";
 
 export class CreateProductImageDto {
   @ApiProperty()
   @IsString()
-  @IsUrl()
+  @Matches(/^(https?:\/\/|data:image\/)/i, {
+    message: "imageUrl must be an http(s) URL or a data:image payload",
+  })
   imageUrl!: string;
 
   @ApiPropertyOptional()

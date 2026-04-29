@@ -1,5 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from "class-validator";
+import { Type } from "class-transformer";
+import { ValidateNested } from "class-validator";
+
+export class ProductFeatureDto {
+  @ApiProperty()
+  @IsString()
+  key!: string;
+
+  @ApiProperty()
+  @IsString()
+  value!: string;
+}
 
 export class CreateProductDto {
   @ApiProperty()
@@ -133,4 +145,10 @@ export class CreateProductDto {
   @IsOptional()
   @IsBoolean()
   isFeatured?: boolean;
+
+  @ApiPropertyOptional({ type: [ProductFeatureDto] })
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => ProductFeatureDto)
+  features?: ProductFeatureDto[];
 }
