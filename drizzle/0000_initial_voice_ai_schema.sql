@@ -155,6 +155,8 @@ CREATE TABLE IF NOT EXISTS "businesses" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "businesses" ADD COLUMN IF NOT EXISTS "owner_user_id" bigint;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "call_requests" (
 	"id" text PRIMARY KEY NOT NULL,
 	"call_id" text NOT NULL,
@@ -179,6 +181,8 @@ CREATE TABLE IF NOT EXISTS "call_requests" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
+--> statement-breakpoint
+ALTER TABLE "call_requests" ADD COLUMN IF NOT EXISTS "product_id" bigint;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "call_turns" (
 	"id" bigserial PRIMARY KEY NOT NULL,
@@ -224,6 +228,10 @@ CREATE TABLE IF NOT EXISTS "categories" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "business_id" bigint;
+--> statement-breakpoint
+ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "parent_id" bigint;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "leads" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"business_id" bigint NOT NULL,
@@ -242,6 +250,10 @@ CREATE TABLE IF NOT EXISTS "leads" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
+--> statement-breakpoint
+ALTER TABLE "leads" ADD COLUMN IF NOT EXISTS "call_id" text;
+--> statement-breakpoint
+ALTER TABLE "leads" ADD COLUMN IF NOT EXISTS "product_id" bigint;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "orders" (
 	"id" bigserial PRIMARY KEY NOT NULL,
@@ -263,6 +275,10 @@ CREATE TABLE IF NOT EXISTS "orders" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
+--> statement-breakpoint
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "call_id" text;
+--> statement-breakpoint
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "product_id" bigint;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "product_features" (
 	"id" bigserial PRIMARY KEY NOT NULL,
@@ -323,6 +339,8 @@ CREATE TABLE IF NOT EXISTS "products" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "products" ADD COLUMN IF NOT EXISTS "category_id" bigint;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "users" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"business_id" bigint,
@@ -339,6 +357,8 @@ CREATE TABLE IF NOT EXISTS "users" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
+--> statement-breakpoint
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "business_id" bigint;
 --> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "business_faqs" ADD CONSTRAINT "business_faqs_business_id_businesses_id_fk" FOREIGN KEY ("business_id") REFERENCES "public"."businesses"("id") ON DELETE cascade ON UPDATE no action;
