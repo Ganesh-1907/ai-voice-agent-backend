@@ -15,6 +15,13 @@
       "when": 1777045564293,
       "tag": "0001_single_shared_voice_agent",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1746835200000,
+      "tag": "0002_fix_enum_values",
+      "breakpoints": true
     }
   ]
 }
