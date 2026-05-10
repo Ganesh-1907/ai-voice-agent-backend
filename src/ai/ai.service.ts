@@ -2013,7 +2013,7 @@ export class AiService {
       return null;
     }
 
-    return normalized;
+    return this.sanitizeRouteLocation(normalized);
   }
 
   private extractLatestBudgetRangeFromConversation(conversationContext: string) {

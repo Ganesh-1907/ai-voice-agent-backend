@@ -18,6 +18,7 @@
     "drizzle:deploy": "npm run drizzle:generate && npm run drizzle:migrate",
     "seed": "dotenv -e .env -- tsx src/database/seed.ts",
     "seed:sample": "dotenv -e .env -- tsx src/database/sample-data.seed.ts",
+    "seed:madhava-cars": "dotenv -e .env -- tsx src/database/madhava-cars.seed.ts",
     "test": "npm run build && node test/smoke-test.js",
     "test:watch": "tsx watch src/main.ts"
   },
