@@ -259,8 +259,7 @@ export class VoicebotWebSocketService {
     session.sendingAudio = true;
     await this.sendTextReply(session, greeting);
     session.sendingAudio = false;
-    // Discard any echo of the greeting captured on the inbound channel
-    session.interrupted = false;
+    // Discard any echo captured on the inbound channel during greeting playback
     session.audioChunks = [];
     session.speechStarted = false;
     session.silenceMs = 0;
@@ -297,18 +296,6 @@ export class VoicebotWebSocketService {
     const chunkDurationMs = Math.round((chunk.length / (session.sampleRate * bytesPerSample)) * 1000);
 
     if (session.sendingAudio) {
-      if (hasSpeech && !session.interrupted) {
-        session.interrupted = true;
-        session.speechStarted = true;
-        session.silenceMs = 0;
-        session.bufferedAudioMs = 0;
-        this.logger.log(`[${session.sessionId}] customer interrupted agent speech`);
-      }
-      if (session.interrupted) {
-        session.audioChunks.push(chunk);
-        session.bufferedAudioMs += chunkDurationMs;
-        session.silenceMs = hasSpeech ? 0 : session.silenceMs + chunkDurationMs;
-      }
       return;
     }
 
@@ -478,7 +465,6 @@ export class VoicebotWebSocketService {
         session.speechStarted = false;
         session.silenceMs = 0;
         session.bufferedAudioMs = 0;
-        session.interrupted = false;
         session.sendingAudio = true;
         await this.sendPcmAudio(session, Buffer.from(aiReply.audioBase64, "base64"));
         session.sendingAudio = false;
@@ -492,12 +478,6 @@ export class VoicebotWebSocketService {
     } finally {
       session.processing = false;
       session.sendingAudio = false;
-    }
-
-    if (session.interrupted && session.audioChunks.length > 0) {
-      session.interrupted = false;
-      this.logger.log(`[${session.sessionId}] flushing buffered interrupt audio chunks=${session.audioChunks.length}`);
-      await this.flushAudio(session);
     }
   }
 
@@ -578,11 +558,6 @@ export class VoicebotWebSocketService {
       if (session.ws.readyState !== session.ws.OPEN) {
         this.logger.warn(`[${session.sessionId}] stopped sending audio because websocket closed chunksSent=${chunksSent}`);
         return;
-      }
-
-      if (session.interrupted) {
-        this.logger.log(`[${session.sessionId}] customer interrupted agent; stopping audio playback chunksSent=${chunksSent}`);
-        break;
       }
 
       const chunk = this.padPcmChunk(pcmBuffer.subarray(offset, offset + chunkSize), 320, 3200);
