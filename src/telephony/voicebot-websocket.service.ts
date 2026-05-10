@@ -77,9 +77,13 @@ type VoicebotSession = {
 export class VoicebotWebSocketService {
   private readonly logger = new Logger(VoicebotWebSocketService.name);
   private readonly processingPrompt = "One moment.";
-  private readonly speechAmplitudeThreshold = 900;
-  private readonly silenceFlushMs = 2000;
-  private readonly maxTurnAudioMs = 8000;
+  private readonly speechStartThreshold = 1800;
+  private readonly speechEndThreshold = 1200;
+  private readonly noiseArtifactRmsThreshold = 1200;
+  private readonly silenceFlushMs = 1200;
+  private readonly maxTurnAudioMs = 6000;
+  private readonly minTranscriptionAudioMs = 350;
+  private readonly trimSilencePaddingMs = 160;
   private readonly greetingAudioCache = new Map<string, Buffer>();
   private server?: WebSocketServer;
 
@@ -297,26 +301,31 @@ export class VoicebotWebSocketService {
     }
 
     const bytesPerSample = session.audioEncoding === "mulaw" ? 1 : 2;
-    const hasSpeech = this.hasSpeech(chunk, session.audioEncoding);
     const chunkDurationMs = Math.round((chunk.length / (session.sampleRate * bytesPerSample)) * 1000);
+    const averageAmplitude = this.computeAverageAmplitude(chunk, session.audioEncoding);
+    const hasSpeechStart = averageAmplitude >= this.speechStartThreshold;
+    const hasSpeechContinuation = averageAmplitude >= this.speechEndThreshold;
 
     if (!session.speechStarted) {
-      if (!hasSpeech) {
+      if (!hasSpeechStart) {
         return;
       }
 
       session.speechStarted = true;
       session.silenceMs = 0;
       session.bufferedAudioMs = 0;
-      this.logger.log(`[${session.sessionId}] caller speech detected`);
+      this.logger.log(
+        `[${session.sessionId}] caller speech detected amplitude=${Math.round(averageAmplitude)} threshold=${this.speechStartThreshold}`,
+      );
     }
 
     session.audioChunks.push(chunk);
     session.bufferedAudioMs += chunkDurationMs;
-    session.silenceMs = hasSpeech ? 0 : session.silenceMs + chunkDurationMs;
+    session.silenceMs = hasSpeechContinuation ? 0 : session.silenceMs + chunkDurationMs;
 
     if (session.silenceMs >= this.silenceFlushMs || session.bufferedAudioMs >= this.maxTurnAudioMs) {
-      void this.flushAudio(session);
+      const flushReason = session.silenceMs >= this.silenceFlushMs ? "silence" : "max-duration";
+      void this.flushAudio(session, flushReason);
     }
   }
 
@@ -325,7 +334,7 @@ export class VoicebotWebSocketService {
     this.logger.log(
       `[${session.sessionId}] Exotel event=stop streamSid=${message.stream_sid ?? message.streamSid ?? session.streamSid ?? "missing"} callSid=${stop.call_sid ?? stop.callSid ?? session.exotelCallSid ?? "missing"} reason=${stop.reason ?? "missing"}`,
     );
-    await this.flushAudio(session);
+    await this.flushAudio(session, "stop");
     await this.finalizeCall(session);
   }
 
@@ -384,7 +393,7 @@ export class VoicebotWebSocketService {
     }
   }
 
-  private async flushAudio(session: VoicebotSession) {
+  private async flushAudio(session: VoicebotSession, reason = "manual") {
     if (session.processing || session.audioChunks.length === 0 || !session.business || !session.callId) {
       if (!session.processing && session.audioChunks.length > 0) {
         this.logger.warn(
@@ -395,32 +404,45 @@ export class VoicebotWebSocketService {
     }
 
     const pcmBuffer = Buffer.concat(session.audioChunks);
+    const bufferedAudioMs = session.bufferedAudioMs;
     session.audioChunks = [];
     session.speechStarted = false;
     session.silenceMs = 0;
     session.bufferedAudioMs = 0;
-    if (pcmBuffer.length < session.sampleRate) {
+    if (bufferedAudioMs < this.minTranscriptionAudioMs) {
       this.logger.log(
-        `[${session.sessionId}] skipped short audio buffer bytes=${pcmBuffer.length} sampleRate=${session.sampleRate}`,
+        `[${session.sessionId}] skipped short audio buffer bytes=${pcmBuffer.length} durationMs=${bufferedAudioMs} sampleRate=${session.sampleRate}`,
       );
       return;
     }
 
     // Decode μ-law once and reuse for both energy check and WAV creation
     const linear16Buffer = session.audioEncoding === "mulaw" ? this.decodeMuLaw(pcmBuffer) : pcmBuffer;
-    const rms = this.computeRms(linear16Buffer);
-    if (rms < 400) {
+    const rawRms = this.computeRms(linear16Buffer);
+    if (rawRms < 400) {
       this.logger.log(
-        `[${session.sessionId}] skipped low-energy audio rms=${Math.round(rms)} encoding=${session.audioEncoding} — likely echo or silence`,
+        `[${session.sessionId}] skipped low-energy audio rms=${Math.round(rawRms)} encoding=${session.audioEncoding} — likely echo or silence`,
       );
       return;
     }
 
+    const trimmedLinear16Buffer = this.trimLinear16Silence(linear16Buffer, session.sampleRate);
+    const trimmedAudioMs = Math.round((trimmedLinear16Buffer.length / (session.sampleRate * 2)) * 1000);
+    if (trimmedAudioMs < this.minTranscriptionAudioMs) {
+      this.logger.log(
+        `[${session.sessionId}] skipped short speech after trim rawDurationMs=${bufferedAudioMs} speechDurationMs=${trimmedAudioMs} rawRms=${Math.round(rawRms)} encoding=${session.audioEncoding}`,
+      );
+      return;
+    }
+
+    const rms = this.computeRms(trimmedLinear16Buffer);
     session.processing = true;
     try {
-      this.logger.log(`[${session.sessionId}] transcribing audio bytes=${pcmBuffer.length} rms=${Math.round(rms)} encoding=${session.audioEncoding}`);
+      this.logger.log(
+        `[${session.sessionId}] transcribing audio bytes=${pcmBuffer.length} durationMs=${bufferedAudioMs} speechDurationMs=${trimmedAudioMs} rawRms=${Math.round(rawRms)} rms=${Math.round(rms)} encoding=${session.audioEncoding} reason=${reason}`,
+      );
       await this.sendTextReply(session, this.processingPrompt);
-      const wavBuffer = this.wrapPcmAsWav(linear16Buffer, session.sampleRate);
+      const wavBuffer = this.wrapPcmAsWav(trimmedLinear16Buffer, session.sampleRate);
       const transcription = await this.aiService.transcribeAudio({
         buffer: wavBuffer,
         filename: "exotel-voicebot.wav",
@@ -433,6 +455,13 @@ export class VoicebotWebSocketService {
       );
       if (!customerText) {
         this.logger.warn(`[${session.sessionId}] empty transcription; no AI turn generated`);
+        return;
+      }
+
+      if (this.isLikelyNoiseTranscription(customerText, rms)) {
+        this.logger.warn(
+          `[${session.sessionId}] ignored likely noise transcription text="${this.truncate(customerText)}" rms=${Math.round(rms)} reason=${reason}`,
+        );
         return;
       }
 
@@ -631,10 +660,10 @@ export class VoicebotWebSocketService {
     return Buffer.concat([header, pcmBuffer]);
   }
 
-  private hasSpeech(rawBuffer: Buffer, encoding: "linear16" | "mulaw" = "linear16") {
+  private computeAverageAmplitude(rawBuffer: Buffer, encoding: "linear16" | "mulaw" = "linear16") {
     const buffer = encoding === "mulaw" ? this.decodeMuLaw(rawBuffer) : rawBuffer;
     if (buffer.length < 2) {
-      return false;
+      return 0;
     }
 
     let totalAmplitude = 0;
@@ -644,7 +673,7 @@ export class VoicebotWebSocketService {
       samples += 1;
     }
 
-    return totalAmplitude / samples > this.speechAmplitudeThreshold;
+    return samples > 0 ? totalAmplitude / samples : 0;
   }
 
   private computeRms(linear16Buffer: Buffer): number {
@@ -663,6 +692,36 @@ export class VoicebotWebSocketService {
     return Math.sqrt(sumSquares / samples);
   }
 
+  private trimLinear16Silence(linear16Buffer: Buffer, sampleRate: number) {
+    if (linear16Buffer.length < 2) {
+      return linear16Buffer;
+    }
+
+    const frameBytes = Math.max(2, Math.round((sampleRate * 20) / 1000) * 2);
+    const paddingBytes = Math.round((sampleRate * this.trimSilencePaddingMs) / 1000) * 2;
+    let firstSpeechByte = -1;
+    let lastSpeechByte = -1;
+
+    for (let offset = 0; offset < linear16Buffer.length; offset += frameBytes) {
+      const end = Math.min(offset + frameBytes, linear16Buffer.length);
+      const amplitude = this.computeAverageAmplitude(linear16Buffer.subarray(offset, end), "linear16");
+      if (amplitude >= this.speechEndThreshold) {
+        if (firstSpeechByte < 0) {
+          firstSpeechByte = offset;
+        }
+        lastSpeechByte = end;
+      }
+    }
+
+    if (firstSpeechByte < 0 || lastSpeechByte < 0) {
+      return Buffer.alloc(0);
+    }
+
+    const start = Math.max(0, firstSpeechByte - paddingBytes);
+    const end = Math.min(linear16Buffer.length, lastSpeechByte + paddingBytes);
+    return linear16Buffer.subarray(start - (start % 2), end - (end % 2));
+  }
+
   private decodeMuLaw(muLawBuffer: Buffer): Buffer {
     const pcm = Buffer.alloc(muLawBuffer.length * 2);
     for (let i = 0; i < muLawBuffer.length; i++) {
@@ -676,6 +735,19 @@ export class VoicebotWebSocketService {
       pcm.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), i * 2);
     }
     return pcm;
+  }
+
+  private isLikelyNoiseTranscription(text: string, rms: number) {
+    if (rms >= this.noiseArtifactRmsThreshold) {
+      return false;
+    }
+
+    const normalized = text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .trim();
+
+    return ["so", "uh", "um", "hm", "hmm"].includes(normalized);
   }
 
   private parseJson(rawMessage: string) {
