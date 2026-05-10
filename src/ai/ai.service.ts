@@ -779,6 +779,7 @@ export class AiService {
       (nameFromData ? this.extractCustomerName(`my name is ${nameFromData}`) : null) ??
       this.extractCustomerName(customerText) ??
       this.extractPlainCustomerName(customerText, conversationContext) ??
+      this.extractBookingCustomerNameFromConversation(conversationContext) ??
       this.extractCustomerName(conversationContext);
 
     const capturedPhone =
@@ -992,11 +993,14 @@ export class AiService {
   private isBookingFlowIntent(customerText: string, conversationContext: string) {
     const text = customerText.toLowerCase();
     const context = conversationContext.toLowerCase();
+    const hasActiveBookingContext =
+      /(book|booking|reserve|reservation|hold|block)/.test(context) &&
+      !this.isCompletedBookingContext(conversationContext);
     return (
       /(book|booking|reserve|reservation|hold|block)/.test(text) ||
       this.isBookingDetailFollowupIntent(customerText, conversationContext) ||
       (/(my name is|i am|this is|my number is|phone number|mobile number)/.test(text) &&
-        /(book|booking|reserve|reservation|hold|block)/.test(context))
+        hasActiveBookingContext)
     );
   }
 
@@ -1011,10 +1015,12 @@ export class AiService {
       return false;
     }
 
+    const explicitNameText = /\b(my name is|i am|this is|full name)\b/.test(text);
+    const awaitingName = this.isAwaitingBookingName(conversationContext);
     return (
-      this.hasPhoneLikeNumber(text) ||
-      /(my name is|i am|this is|my number is|phone number|mobile number)/.test(text) ||
-      this.looksLikePlainNameAnswer(text)
+      phoneDetailText ||
+      explicitNameText ||
+      (awaitingName && this.looksLikePlainNameAnswer(text))
     );
   }
 
@@ -1099,6 +1105,10 @@ export class AiService {
       "these",
       "those",
       "them",
+      "in",
+      "at",
+      "near",
+      "around",
       "car",
       "cars",
       "petrol",
@@ -1122,6 +1132,14 @@ export class AiService {
       "overall",
       "all",
       "matching",
+      "inventory",
+      "stock",
+      "item",
+      "items",
+      "product",
+      "products",
+      "dealer",
+      "dealership",
       "sorted",
       "ascending",
       "descending",
@@ -2306,7 +2324,16 @@ export class AiService {
     return /\d[\d\s-]{6,}/.test(input);
   }
 
+  private isCompletedBookingContext(conversationContext: string) {
+    const context = conversationContext.toLowerCase();
+    return /booking request for [\s\S]{2,160}? is recorded/.test(context) || /we will call you on\s*\d[\d\s-]{8,}/.test(context);
+  }
+
   private hasPendingBookingPrompt(conversationContext: string) {
+    if (this.isCompletedBookingContext(conversationContext)) {
+      return false;
+    }
+
     const context = conversationContext.toLowerCase();
     return (
       /(book|booking|reserve|reservation|hold|block)/.test(context) &&
@@ -2316,6 +2343,35 @@ export class AiService {
     );
   }
 
+  private isAwaitingBookingName(conversationContext: string) {
+    if (this.isCompletedBookingContext(conversationContext)) {
+      return false;
+    }
+
+    const lines = conversationContext
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .reverse();
+
+    for (const line of lines) {
+      const agentLine = line.match(/^agent:\s*(.+)$/i)?.[1]?.toLowerCase().trim();
+      if (!agentLine) {
+        continue;
+      }
+
+      if (/share your full name|full name for booking|full name and 10-digit/.test(agentLine)) {
+        return true;
+      }
+
+      if (/share your valid|10-digit mobile|mobile number|phone number/.test(agentLine)) {
+        return false;
+      }
+    }
+
+    return false;
+  }
+
   private looksLikePlainNameAnswer(input: string) {
     const normalized = input
       .toLowerCase()
@@ -2323,6 +2379,33 @@ export class AiService {
       .replace(/\s+/g, " ")
       .trim();
     if (!normalized || normalized.length < 2) {
+      return false;
+    }
+
+    const fillerWords = new Set([
+      "hello",
+      "hi",
+      "hey",
+      "yeah",
+      "yes",
+      "yep",
+      "ok",
+      "okay",
+      "sure",
+      "right",
+      "no",
+      "nope",
+      "thanks",
+      "thank you",
+      "um",
+      "uh",
+      "hmm",
+      "mm",
+      "mhm",
+      "mm-hmm",
+      "so",
+    ]);
+    if (fillerWords.has(normalized)) {
       return false;
     }
 
@@ -2382,7 +2465,11 @@ export class AiService {
   }
 
   private extractPlainCustomerName(input: string, conversationContext: string) {
-    if (!this.hasPendingBookingPrompt(conversationContext) || !this.looksLikePlainNameAnswer(input)) {
+    if (
+      !this.hasPendingBookingPrompt(conversationContext) ||
+      !this.isAwaitingBookingName(conversationContext) ||
+      !this.looksLikePlainNameAnswer(input)
+    ) {
       return null;
     }
 
@@ -2390,6 +2477,68 @@ export class AiService {
       .replace(/[^a-zA-Z\s'-]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+
+    return cleaned
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+      .join(" ");
+  }
+
+  private extractBookingCustomerNameFromConversation(conversationContext: string) {
+    if (!this.hasPendingBookingPrompt(conversationContext)) {
+      return null;
+    }
+
+    const lines = conversationContext
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    let capturedName: string | null = null;
+    let awaitingName = false;
+
+    for (const line of lines) {
+      const agentLine = line.match(/^agent:\s*(.+)$/i)?.[1]?.trim();
+      if (agentLine) {
+        const thanksName = agentLine.match(/^thanks\s+([a-z][a-z\s'-]{1,60})\.\s+please share your valid/i);
+        if (thanksName?.[1]) {
+          capturedName = this.formatCustomerName(thanksName[1]);
+        }
+        awaitingName = /share your full name|full name for booking|full name and 10-digit/i.test(agentLine);
+        continue;
+      }
+
+      const customerLine = line.match(/^customer:\s*(.+)$/i)?.[1]?.trim();
+      if (!customerLine) {
+        continue;
+      }
+
+      const explicitName = this.extractCustomerName(customerLine);
+      if (explicitName) {
+        capturedName = explicitName;
+        awaitingName = false;
+        continue;
+      }
+
+      if (awaitingName && this.looksLikePlainNameAnswer(customerLine)) {
+        capturedName = this.formatCustomerName(customerLine);
+        awaitingName = false;
+      }
+    }
+
+    return capturedName;
+  }
+
+  private formatCustomerName(value: string) {
+    const cleaned = value
+      .replace(/[^a-zA-Z\s'-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (cleaned.length < 2) {
+      return null;
+    }
 
     return cleaned
       .split(" ")
