@@ -256,7 +256,15 @@ export class VoicebotWebSocketService {
 
     const greeting = this.businessesService.getAgentGreeting(business);
     this.logger.log(`[${session.sessionId}] sending agent greeting text="${this.truncate(greeting)}"`);
+    session.sendingAudio = true;
     await this.sendTextReply(session, greeting);
+    session.sendingAudio = false;
+    // Discard any echo of the greeting captured on the inbound channel
+    session.interrupted = false;
+    session.audioChunks = [];
+    session.speechStarted = false;
+    session.silenceMs = 0;
+    session.bufferedAudioMs = 0;
     await this.callsService.appendConversationTurn(session.callId, {
       speaker: "agent",
       text: greeting,
@@ -280,7 +288,7 @@ export class VoicebotWebSocketService {
       );
     }
 
-    if (session.processing) {
+    if (!session.business || session.processing) {
       return;
     }
 
@@ -410,11 +418,20 @@ export class VoicebotWebSocketService {
       return;
     }
 
+    // Decode μ-law once and reuse for both energy check and WAV creation
+    const linear16Buffer = session.audioEncoding === "mulaw" ? this.decodeMuLaw(pcmBuffer) : pcmBuffer;
+    const rms = this.computeRms(linear16Buffer);
+    if (rms < 400) {
+      this.logger.log(
+        `[${session.sessionId}] skipped low-energy audio rms=${Math.round(rms)} encoding=${session.audioEncoding} — likely echo or silence`,
+      );
+      return;
+    }
+
     session.processing = true;
     try {
-      this.logger.log(`[${session.sessionId}] transcribing audio bytes=${pcmBuffer.length} encoding=${session.audioEncoding}`);
+      this.logger.log(`[${session.sessionId}] transcribing audio bytes=${pcmBuffer.length} rms=${Math.round(rms)} encoding=${session.audioEncoding}`);
       await this.sendTextReply(session, this.processingPrompt);
-      const linear16Buffer = session.audioEncoding === "mulaw" ? this.decodeMuLaw(pcmBuffer) : pcmBuffer;
       const wavBuffer = this.wrapPcmAsWav(linear16Buffer, session.sampleRate);
       const transcription = await this.aiService.transcribeAudio({
         buffer: wavBuffer,
@@ -651,6 +668,22 @@ export class VoicebotWebSocketService {
     }
 
     return totalAmplitude / samples > this.speechAmplitudeThreshold;
+  }
+
+  private computeRms(linear16Buffer: Buffer): number {
+    if (linear16Buffer.length < 2) {
+      return 0;
+    }
+
+    let sumSquares = 0;
+    let samples = 0;
+    for (let i = 0; i + 1 < linear16Buffer.length; i += 2) {
+      const sample = linear16Buffer.readInt16LE(i);
+      sumSquares += sample * sample;
+      samples += 1;
+    }
+
+    return Math.sqrt(sumSquares / samples);
   }
 
   private decodeMuLaw(muLawBuffer: Buffer): Buffer {

@@ -4,8 +4,6 @@ import { ConfigService } from "@nestjs/config";
 @Injectable()
 export class ElevenLabsProvider {
   private readonly logger = new Logger(ElevenLabsProvider.name);
-  private readonly MAX_TTS_CHARS = 220;
-
   constructor(@Inject(ConfigService) private readonly configService: ConfigService) {}
 
   async textToSpeech(text: string, options?: { outputFormat?: string }) {
@@ -21,13 +19,10 @@ export class ElevenLabsProvider {
       };
     }
 
-    const truncatedText =
-      text.length > this.MAX_TTS_CHARS ? `${text.slice(0, this.MAX_TTS_CHARS - 3)}...` : text;
-
     try {
       const startedAt = Date.now();
       this.logger.log(
-        `ElevenLabs TTS request voiceId=${voiceId} outputFormat=${outputFormat} textChars=${truncatedText.length}${truncatedText.length < text.length ? ` (truncated from ${text.length})` : ""}`,
+        `ElevenLabs TTS request voiceId=${voiceId} outputFormat=${outputFormat} textChars=${text.length}`,
       );
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${outputFormat}`, {
         method: "POST",
@@ -36,7 +31,7 @@ export class ElevenLabsProvider {
           "xi-api-key": apiKey,
         },
         body: JSON.stringify({
-          text: truncatedText,
+          text,
           model_id: "eleven_multilingual_v2",
         }),
       });
@@ -52,7 +47,7 @@ export class ElevenLabsProvider {
         }
 
         if (isQuotaError) {
-          this.logger.warn(`ElevenLabs quota exceeded for textChars=${truncatedText.length}: ${this.truncate(rawBody)}`);
+          this.logger.warn(`ElevenLabs quota exceeded for textChars=${text.length}: ${this.truncate(rawBody)}`);
         } else if (response.status === 401 || response.status === 403) {
           this.logger.error(`ElevenLabs auth error status=${response.status}: ${this.truncate(rawBody)}`);
         } else {
