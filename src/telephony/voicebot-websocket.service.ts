@@ -62,7 +62,7 @@ type VoicebotSession = {
   audioChunks: Buffer[];
   processing: boolean;
   sendingAudio: boolean;
-  interrupted?: boolean;
+  echoUntilMs?: number;
   flushTimer?: NodeJS.Timeout;
   sequenceNumber: number;
   mediaChunk: number;
@@ -259,6 +259,7 @@ export class VoicebotWebSocketService {
     session.sendingAudio = true;
     await this.sendTextReply(session, greeting);
     session.sendingAudio = false;
+    session.echoUntilMs = Date.now() + 350;
     // Discard any echo captured on the inbound channel during greeting playback
     session.audioChunks = [];
     session.speechStarted = false;
@@ -291,13 +292,13 @@ export class VoicebotWebSocketService {
       return;
     }
 
+    if (session.sendingAudio || (session.echoUntilMs !== undefined && Date.now() < session.echoUntilMs)) {
+      return;
+    }
+
     const bytesPerSample = session.audioEncoding === "mulaw" ? 1 : 2;
     const hasSpeech = this.hasSpeech(chunk, session.audioEncoding);
     const chunkDurationMs = Math.round((chunk.length / (session.sampleRate * bytesPerSample)) * 1000);
-
-    if (session.sendingAudio) {
-      return;
-    }
 
     if (!session.speechStarted) {
       if (!hasSpeech) {
@@ -476,6 +477,7 @@ export class VoicebotWebSocketService {
       const stack = error instanceof Error ? error.stack : undefined;
       this.logger.error(`[${session.sessionId}] Voicebot turn failed: ${message}`, stack);
     } finally {
+      session.echoUntilMs = Date.now() + 350;
       session.processing = false;
       session.sendingAudio = false;
     }

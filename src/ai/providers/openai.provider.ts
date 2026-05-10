@@ -245,7 +245,7 @@ export class OpenAiProvider {
     const model =
       this.normalizeEnvValue(
         this.configService.get<string>("GROQ_TRANSCRIPTION_MODEL") ?? process.env.GROQ_TRANSCRIPTION_MODEL,
-      ) ?? "whisper-large-v3";
+      ) ?? "whisper-large-v3-turbo";
 
     if (!apiKey) {
       this.logger.warn("GROQ API key missing; transcription fallback returns empty text");
@@ -271,10 +271,6 @@ export class OpenAiProvider {
         formData.append("model", model);
         formData.append("response_format", "json");
         formData.append("language", "en");
-        formData.append(
-          "prompt",
-          "inventory, cars available, how many cars, price in lakhs, booking, callback, dealership, test drive, variant, fuel type, diesel, petrol, automatic, manual, car dealer, SUV, sedan",
-        );
 
         const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
           method: "POST",
