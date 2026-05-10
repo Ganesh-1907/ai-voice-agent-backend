@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { and, desc, eq } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
-import { businesses, callRequests, orders } from "../database/schema";
+import { businesses, callRequests, orders, products } from "../database/schema";
 import { MessagingService } from "../messaging/messaging.service";
 
 export type BusinessUpdateType = "order" | "preorder" | "book_table" | "callback_request" | "enquiry" | "booking" | "general";
@@ -59,9 +59,10 @@ export class UpdatesService {
     summary: string;
     transcript: string;
   }) {
-    const requestType = this.classifyRequestType(input.summary, input.transcript);
-    const customerName = this.extractNameFromTranscript(input.transcript);
-    const customerMobile = this.extractValidIndianMobile(input.transcript);
+    const confirmedOrder = await this.extractConfirmedOrderDetails(input.businessId, input.transcript);
+    const requestType = confirmedOrder ? "booking" : this.classifyRequestType(input.summary, input.transcript);
+    const customerName = confirmedOrder?.customerName ?? this.extractNameFromTranscript(input.transcript);
+    const customerMobile = confirmedOrder?.customerMobile ?? this.extractValidIndianMobile(input.transcript);
     const now = new Date();
 
     const [created] = await this.database.db
@@ -82,12 +83,23 @@ export class UpdatesService {
       })
       .returning();
 
-    if (requestType === "order" || requestType === "booking" || requestType === "book_table" || requestType === "preorder") {
+    if (confirmedOrder) {
+      const [existingOrder] = await this.database.db
+        .select({ id: orders.id })
+        .from(orders)
+        .where(eq(orders.callId, input.callId))
+        .limit(1);
+
+      if (existingOrder) {
+        return this.mapCallRequest(created);
+      }
+
       await this.database.db.insert(orders).values({
         businessId: Number(input.businessId),
         callId: input.callId,
-        customerNumber: customerMobile ?? input.fromNumber,
-        customerName: customerName ?? null,
+        productId: confirmedOrder.productId,
+        customerNumber: confirmedOrder.customerMobile,
+        customerName: confirmedOrder.customerName,
         summary: input.summary,
         transcript: input.transcript,
         status: "pending",
@@ -200,16 +212,89 @@ export class UpdatesService {
       return "preorder";
     }
 
-    if (
-      source.includes("order") ||
-      source.includes("buy") ||
-      source.includes("purchase") ||
-      source.includes("book this")
-    ) {
+    if (/\b(book|booking|reserve|reservation)\b/.test(source)) {
+      return "booking";
+    }
+
+    if (/\b(order|buy|purchase)\b/.test(source) || /\bbook this\b/.test(source)) {
       return "order";
     }
 
     return "general";
+  }
+
+  private async extractConfirmedOrderDetails(businessId: string, transcript: string) {
+    const productName = this.extractConfirmedBookingProductName(transcript);
+    const customerName = this.extractConfirmedBookingName(transcript) ?? this.extractNameFromTranscript(transcript);
+    const customerMobile = this.extractValidIndianMobile(transcript);
+    const product = productName ? await this.findMatchingProduct(Number(businessId), productName) : null;
+
+    if (!product || !customerName || !customerMobile) {
+      return null;
+    }
+
+    return {
+      productId: product.id,
+      productName: product.name,
+      customerName,
+      customerMobile,
+    };
+  }
+
+  private extractConfirmedBookingProductName(transcript: string) {
+    const confirmed = transcript.match(/booking request for\s+(.+?)\s+is recorded/i);
+    if (!confirmed?.[1]) {
+      return null;
+    }
+
+    return confirmed[1].trim().replace(/[.!,;:]+$/g, "").replace(/\s+/g, " ");
+  }
+
+  private extractConfirmedBookingName(transcript: string) {
+    const confirmed = transcript.match(/\bPerfect\s+([a-z][a-z\s.'-]{1,60})\.\s+Your booking request/i);
+    if (!confirmed?.[1]) {
+      return null;
+    }
+
+    return this.normalizeCustomerName(confirmed[1]);
+  }
+
+  private async findMatchingProduct(businessId: number, productName: string) {
+    if (!Number.isFinite(businessId)) {
+      return null;
+    }
+
+    const rows = await this.database.db
+      .select({
+        id: products.id,
+        name: products.name,
+        brand: products.brand,
+        model: products.model,
+        variant: products.variant,
+      })
+      .from(products)
+      .where(eq(products.businessId, businessId));
+
+    const needle = this.normalizeForMatch(productName);
+    let best: { id: number; name: string; score: number } | null = null;
+    for (const row of rows) {
+      const haystack = this.normalizeForMatch([row.name, row.brand, row.model, row.variant].filter(Boolean).join(" "));
+      const tokens = haystack.split(/\s+/).filter((token) => token.length > 2);
+      const score = tokens.reduce((sum, token) => (needle.includes(token) ? sum + 1 : sum), 0);
+      if (!best || score > best.score) {
+        best = { id: row.id, name: row.name, score };
+      }
+    }
+
+    return best && best.score >= 2 ? { id: best.id, name: best.name } : null;
+  }
+
+  private normalizeForMatch(value: string) {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private createApprovalMessage(input: {
@@ -251,8 +336,9 @@ export class UpdatesService {
   }
 
   private extractNameFromTranscript(input: string) {
-    const pattern = /(?:my name is|i am|this is)\s+([a-z][a-z\s.'-]{1,60})/i;
-    const match = input.match(pattern);
+    const directName = input.match(/(?:my name is|i am|this is)\s+([a-z][a-z\s.'-]{1,60})/i);
+    const fullNameSuffix = input.match(/([a-z][a-z\s.'-]{1,60})\s+is\s+my\s+full\s+name/i);
+    const match = directName ?? fullNameSuffix;
     if (!match?.[1]) {
       return null;
     }
@@ -262,7 +348,14 @@ export class UpdatesService {
       return null;
     }
 
-    return cleaned
+    return this.normalizeCustomerName(cleaned);
+  }
+
+  private normalizeCustomerName(value: string) {
+    return value
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[.!,;:]+$/g, "")
       .split(" ")
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
       .join(" ");

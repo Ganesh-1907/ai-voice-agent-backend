@@ -1,5 +1,5 @@
 import { ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
 import { businesses, callRequests, calls, orders, products } from "../database/schema";
@@ -37,7 +37,7 @@ export class UiService {
       this.database.db
         .select({ id: orders.id })
         .from(orders)
-        .where(this.buildBusinessFilter(orders.businessId, businessIds)),
+        .where(and(this.buildBusinessFilter(orders.businessId, businessIds), isNotNull(orders.productId))),
     ]);
 
     return {
@@ -134,7 +134,7 @@ export class UiService {
       .from(orders)
       .leftJoin(businesses, eq(orders.businessId, businesses.id))
       .leftJoin(products, eq(orders.productId, products.id))
-      .where(this.buildBusinessFilter(orders.businessId, businessIds))
+      .where(and(this.buildBusinessFilter(orders.businessId, businessIds), isNotNull(orders.productId)))
       .orderBy(desc(orders.createdAt));
 
     return rows.map((row) => ({

@@ -60,6 +60,9 @@ type VoicebotSession = {
   audioChunks: Buffer[];
   processing: boolean;
   sendingAudio: boolean;
+  starting: boolean;
+  readyForCallerAudio: boolean;
+  echoUntilMs?: number;
   flushTimer?: NodeJS.Timeout;
   sequenceNumber: number;
   mediaChunk: number;
@@ -115,6 +118,8 @@ export class VoicebotWebSocketService {
         audioChunks: [],
         processing: false,
         sendingAudio: false,
+        starting: false,
+        readyForCallerAudio: false,
         sequenceNumber: 1,
         mediaChunk: 1,
         inboundMediaMessages: 0,
@@ -191,6 +196,13 @@ export class VoicebotWebSocketService {
   }
 
   private async handleStart(session: VoicebotSession, message: ExotelStartMessage) {
+    session.starting = true;
+    session.readyForCallerAudio = false;
+    session.audioChunks = [];
+    session.speechStarted = false;
+    session.silenceMs = 0;
+    session.bufferedAudioMs = 0;
+
     const start = message.start ?? {};
     session.streamSid = message.stream_sid ?? message.streamSid ?? start.stream_sid ?? start.streamSid;
     session.exotelCallSid = start.call_sid ?? start.callSid;
@@ -216,6 +228,7 @@ export class VoicebotWebSocketService {
       this.logger.warn(
         `[${session.sessionId}] business mapping failed from=${session.fromNumber ?? "missing"} to=${session.toNumber ?? "missing"}`,
       );
+      session.starting = false;
       return;
     }
 
@@ -242,7 +255,25 @@ export class VoicebotWebSocketService {
     session.callId = call.id;
     session.startedAt = new Date();
     this.logger.log(`[${session.sessionId}] call created callId=${session.callId} status=${call.status}`);
-    this.logger.log(`[${session.sessionId}] waiting for caller media after Exotel greeting`);
+
+    const greeting = this.businessesService.getAgentGreeting(business);
+    this.logger.log(`[${session.sessionId}] sending agent greeting text="${this.truncate(greeting)}"`);
+    session.sendingAudio = true;
+    await this.sendTextReply(session, greeting);
+    session.sendingAudio = false;
+    session.echoUntilMs = Date.now() + 800;
+    session.audioChunks = [];
+    session.speechStarted = false;
+    session.silenceMs = 0;
+    session.bufferedAudioMs = 0;
+    await this.callsService.appendConversationTurn(session.callId, {
+      speaker: "agent",
+      text: greeting,
+      createdAt: new Date().toISOString(),
+    });
+    session.readyForCallerAudio = true;
+    session.starting = false;
+    this.logger.log(`[${session.sessionId}] greeting sent - waiting for customer to speak`);
   }
 
   private handleMedia(session: VoicebotSession, message: ExotelMediaMessage) {
@@ -260,7 +291,15 @@ export class VoicebotWebSocketService {
       );
     }
 
-    if (session.processing || session.sendingAudio) {
+    if (
+      !session.business ||
+      !session.callId ||
+      session.starting ||
+      !session.readyForCallerAudio ||
+      session.processing ||
+      session.sendingAudio ||
+      (session.echoUntilMs !== undefined && Date.now() < session.echoUntilMs)
+    ) {
       return;
     }
 
@@ -426,6 +465,7 @@ export class VoicebotWebSocketService {
         session.sendingAudio = true;
         await this.sendPcmAudio(session, Buffer.from(aiReply.audioBase64, "base64"));
         session.sendingAudio = false;
+        session.echoUntilMs = Date.now() + 800;
       } else {
         this.logger.warn(`[${session.sessionId}] AI reply has no audio; ElevenLabs/TTS likely failed`);
       }

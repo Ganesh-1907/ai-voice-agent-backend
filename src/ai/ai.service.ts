@@ -570,6 +570,10 @@ export class AiService {
     recentConversation: string,
     conversationContext: string,
   ): Promise<FunctionRouteDecision | null> {
+    if (this.isBookingDetailFollowupIntent(customerText, conversationContext)) {
+      return { function: 3, data: {} };
+    }
+
     const llmRoute = await this.openAiProvider.selectFunctionRoute({
       customerText,
       conversationContext: recentConversation,
@@ -774,6 +778,7 @@ export class AiService {
     const capturedName =
       (nameFromData ? this.extractCustomerName(`my name is ${nameFromData}`) : null) ??
       this.extractCustomerName(customerText) ??
+      this.extractPlainCustomerName(customerText, conversationContext) ??
       this.extractCustomerName(conversationContext);
 
     const capturedPhone =
@@ -868,7 +873,9 @@ export class AiService {
     if (mode === "count") {
       const count = this.extractCountFromRows(rows);
       if (count !== null) {
-        return `There are ${count} matching cars in that range.`;
+        return this.hasExplicitQueryConstraints(customerText)
+          ? `There are ${count} matching cars in that range.`
+          : `There are ${count} cars in inventory.`;
       }
     }
 
@@ -987,8 +994,27 @@ export class AiService {
     const context = conversationContext.toLowerCase();
     return (
       /(book|booking|reserve|reservation|hold|block)/.test(text) ||
+      this.isBookingDetailFollowupIntent(customerText, conversationContext) ||
       (/(my name is|i am|this is|my number is|phone number|mobile number)/.test(text) &&
         /(book|booking|reserve|reservation|hold|block)/.test(context))
+    );
+  }
+
+  private isBookingDetailFollowupIntent(customerText: string, conversationContext: string) {
+    const text = customerText.toLowerCase().replace(/\s+/g, " ").trim();
+    const phoneDetailText = this.hasPhoneLikeNumber(text) || /(my number is|phone number|mobile number)/.test(text);
+    if (!text || (!phoneDetailText && this.shouldUseSqlFlow(text)) || (!phoneDetailText && this.isBusinessInfoIntent(text))) {
+      return false;
+    }
+
+    if (!this.hasPendingBookingPrompt(conversationContext)) {
+      return false;
+    }
+
+    return (
+      this.hasPhoneLikeNumber(text) ||
+      /(my name is|i am|this is|my number is|phone number|mobile number)/.test(text) ||
+      this.looksLikePlainNameAnswer(text)
     );
   }
 
@@ -1067,6 +1093,12 @@ export class AiService {
 
     const stopWords = new Set([
       "suv",
+      "the",
+      "this",
+      "that",
+      "these",
+      "those",
+      "them",
       "car",
       "cars",
       "petrol",
@@ -1086,6 +1118,10 @@ export class AiService {
       "lakh",
       "price",
       "range",
+      "total",
+      "overall",
+      "all",
+      "matching",
       "sorted",
       "ascending",
       "descending",
@@ -1955,7 +1991,7 @@ export class AiService {
     }
 
     const normalized = cityMatch[1].trim().replace(/\s+/g, " ");
-    if (/(inventory|price|range|cars|car|lakhs|lakh|rupees|ascending|descending|order|sorted|remaining|next|same|that|this|stock|suv|petrol|diesel|automatic|manual|fuel|transmission)/i.test(normalized)) {
+    if (/(inventory|price|range|cars|car|lakhs|lakh|rupees|ascending|descending|order|sorted|remaining|next|same|that|this|stock|suv|petrol|diesel|automatic|manual|fuel|transmission|total|overall|all|matching)/i.test(normalized)) {
       return null;
     }
 
@@ -2270,6 +2306,38 @@ export class AiService {
     return /\d[\d\s-]{6,}/.test(input);
   }
 
+  private hasPendingBookingPrompt(conversationContext: string) {
+    const context = conversationContext.toLowerCase();
+    return (
+      /(book|booking|reserve|reservation|hold|block)/.test(context) &&
+      /(share your full name|share your valid|10-digit mobile|mobile number|booking confirmation|final confirmation)/.test(
+        context,
+      )
+    );
+  }
+
+  private looksLikePlainNameAnswer(input: string) {
+    const normalized = input
+      .toLowerCase()
+      .replace(/[^a-z\s'-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized || normalized.length < 2) {
+      return false;
+    }
+
+    if (
+      /(book|booking|reserve|reservation|hold|block|car|cars|vehicle|vehicles|list|show|count|total|price|cost|location|address|phone|mobile|number)/.test(
+        normalized,
+      )
+    ) {
+      return false;
+    }
+
+    const parts = normalized.split(" ").filter(Boolean);
+    return parts.length >= 1 && parts.length <= 5 && parts.every((part) => part.length >= 2);
+  }
+
   private extractValidIndianMobile(input: string) {
     const matches = input.match(/[\d\s-()+]{8,}/g) ?? [];
     for (const raw of matches) {
@@ -2290,8 +2358,9 @@ export class AiService {
 
   private extractCustomerName(input: string) {
     const normalizedInput = input.replace(/\r?\n/g, " ");
-    const pattern = /(?:my name is|i am|this is)\s+([a-z][a-z\s'-]{1,60})/i;
-    const match = normalizedInput.match(pattern);
+    const directName = normalizedInput.match(/(?:my name is|i am|this is)\s+([a-z][a-z\s'-]{1,60})/i);
+    const fullNameSuffix = normalizedInput.match(/([a-z][a-z\s'-]{1,60})\s+is\s+my\s+full\s+name/i);
+    const match = directName ?? fullNameSuffix;
     if (!match?.[1]) {
       return null;
     }
@@ -2308,6 +2377,23 @@ export class AiService {
 
     return cleaned
       .split(" ")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+      .join(" ");
+  }
+
+  private extractPlainCustomerName(input: string, conversationContext: string) {
+    if (!this.hasPendingBookingPrompt(conversationContext) || !this.looksLikePlainNameAnswer(input)) {
+      return null;
+    }
+
+    const cleaned = input
+      .replace(/[^a-zA-Z\s'-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return cleaned
+      .split(" ")
+      .filter(Boolean)
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
       .join(" ");
   }
