@@ -78,8 +78,8 @@ export class VoicebotWebSocketService {
   private readonly logger = new Logger(VoicebotWebSocketService.name);
   private readonly processingPrompt = "One moment.";
   private readonly speechAmplitudeThreshold = 900;
-  private readonly silenceFlushMs = 800;
-  private readonly maxTurnAudioMs = 4500;
+  private readonly silenceFlushMs = 2000;
+  private readonly maxTurnAudioMs = 8000;
   private readonly greetingAudioCache = new Map<string, Buffer>();
   private server?: WebSocketServer;
 
@@ -259,7 +259,7 @@ export class VoicebotWebSocketService {
     session.sendingAudio = true;
     await this.sendTextReply(session, greeting);
     session.sendingAudio = false;
-    session.echoUntilMs = Date.now() + 350;
+    session.echoUntilMs = Date.now() + 600;
     // Discard any echo captured on the inbound channel during greeting playback
     session.audioChunks = [];
     session.speechStarted = false;
@@ -477,7 +477,7 @@ export class VoicebotWebSocketService {
       const stack = error instanceof Error ? error.stack : undefined;
       this.logger.error(`[${session.sessionId}] Voicebot turn failed: ${message}`, stack);
     } finally {
-      session.echoUntilMs = Date.now() + 350;
+      session.echoUntilMs = Date.now() + 600;
       session.processing = false;
       session.sendingAudio = false;
     }
