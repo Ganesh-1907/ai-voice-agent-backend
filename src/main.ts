@@ -11,6 +11,10 @@ import { VoicebotWebSocketService } from "./telephony/voicebot-websocket.service
 async function bootstrap() {
   const logger = new Logger("Bootstrap");
   const app = await NestFactory.create(AppModule);
+  const httpAdapter = app.getHttpAdapter();
+  const expressApp = httpAdapter.getInstance();
+
+  expressApp.set("trust proxy", 1);
 
   app.setGlobalPrefix("api");
   app.useGlobalPipes(

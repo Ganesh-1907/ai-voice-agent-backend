@@ -296,7 +296,9 @@ export class AiService {
     const carsOnlyIntent = /\b(car|cars)\b/.test(normalizedText);
     const broadPriceInventoryIntent = pricingIntent && (listByPriceIntent || carsOnlyIntent || /inventory|vehicles|products|items/.test(normalizedText));
 
-    if (thanksIntent) {
+    const isFirstTurn = !conversationContext.includes("Agent:");
+
+    if (!isFirstTurn && thanksIntent) {
       return `Thank you for calling ${business.name}. Have a great day.`;
     }
 
@@ -304,7 +306,7 @@ export class AiService {
       return `This is ${business.name}. How can I help you today?`;
     }
 
-    if (/(\bbye\b|goodbye|thank you|thanks|see you|talk to you later)/.test(normalizedText)) {
+    if (!isFirstTurn && /(\bbye\b|goodbye|thank you|thanks|see you|talk to you later)/.test(normalizedText)) {
       return `Thank you for calling ${business.name}. Have a great day. Goodbye.`;
     }
 
@@ -1118,7 +1120,7 @@ export class AiService {
     customerText: string,
     conversationContext: string,
   ) {
-    const fixedReply = await this.tryFixedSqlReply(business, customerText);
+    const fixedReply = await this.tryFixedSqlReply(business, customerText, conversationContext);
     if (fixedReply) {
       return fixedReply;
     }
@@ -1414,14 +1416,15 @@ export class AiService {
     ].join(" ");
   }
 
-  private async tryFixedSqlReply(business: CallBusinessContext, customerText: string) {
+  private async tryFixedSqlReply(business: CallBusinessContext, customerText: string, conversationContext = "") {
     const text = customerText.toLowerCase().replace(/\s+/g, " ").trim();
+    const isFirstTurn = !conversationContext.includes("Agent:");
 
-    if (/(\bthanks\b|thank you|much appreciated)/.test(text)) {
+    if (!isFirstTurn && /(\bthanks\b|thank you|much appreciated)/.test(text)) {
       return `Thank you for calling ${business.name}. Have a great day.`;
     }
 
-    if (/(\bbye\b|goodbye|see you|talk to you later)/.test(text)) {
+    if (!isFirstTurn && /(\bbye\b|goodbye|see you|talk to you later)/.test(text)) {
       return `Thank you for calling ${business.name}. Have a great day. Goodbye.`;
     }
 

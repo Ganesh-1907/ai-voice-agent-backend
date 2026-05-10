@@ -14,6 +14,7 @@ import {
   UseInterceptors,
   ValidationPipe,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
 
@@ -42,6 +43,7 @@ export class TelephonyController {
     @Inject(TelephonyService) private readonly telephonyService: TelephonyService,
     @Inject(BusinessesService) private readonly businessesService: BusinessesService,
     @Inject(CallsService) private readonly callsService: CallsService,
+    @Inject(ConfigService) private readonly configService: ConfigService,
   ) {}
 
   @Public()
@@ -277,12 +279,28 @@ export class TelephonyController {
   @Public()
   @Get("voicebot/session")
   voicebotSession(@Req() request: Request) {
-    const host = request.get("x-forwarded-host") ?? request.get("host") ?? "";
-    const proto = request.get("x-forwarded-proto") ?? request.protocol ?? "https";
-    const wsProtocol = proto === "http" ? "ws" : "wss";
+    const publicBaseUrl = this.configService.get<string>("VOICEBOT_PUBLIC_BASE_URL");
+    if (publicBaseUrl) {
+      return {
+        url: this.buildVoicebotMediaUrlFromBase(publicBaseUrl),
+      };
+    }
+
+    const host =
+      this.firstForwardedHeaderValue(request.get("x-forwarded-host")) ??
+      this.firstForwardedHeaderValue(request.get("host")) ??
+      "";
+    const protocol =
+      this.firstForwardedHeaderValue(request.get("x-forwarded-proto")) ??
+      request.protocol ??
+      (request.secure ? "https" : "http");
+    const isLocalHost = /^(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?$/i.test(host);
+    const shouldUseSecureWebSocket =
+      protocol.toLowerCase() === "https" ||
+      (this.configService.get<string>("NODE_ENV") === "production" && !isLocalHost);
 
     return {
-      url: `${wsProtocol}://${host}/api/telephony/voicebot/media?sample-rate=16000`,
+      url: `${shouldUseSecureWebSocket ? "wss" : "ws"}://${host}/api/telephony/voicebot/media?sample-rate=16000`,
     };
   }
 
@@ -475,5 +493,21 @@ export class TelephonyController {
     }
 
     return undefined;
+  }
+
+  private firstForwardedHeaderValue(value: string | undefined) {
+    return value
+      ?.split(",")
+      .map((part) => part.trim())
+      .find(Boolean);
+  }
+
+  private buildVoicebotMediaUrlFromBase(baseUrl: string) {
+    const parsed = new URL(baseUrl);
+    parsed.protocol = parsed.protocol === "http:" ? "ws:" : "wss:";
+    parsed.pathname = "/api/telephony/voicebot/media";
+    parsed.search = "?sample-rate=16000";
+    parsed.hash = "";
+    return parsed.toString();
   }
 }
