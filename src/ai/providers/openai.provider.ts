@@ -141,6 +141,8 @@ export class OpenAiProvider {
             "Function 3: booking flow. Data fields: carName, customerName, customerMobile.",
             "Important for Function 3: 'customerMobile' must be a valid 10-digit number. Only fill data fields if the user explicitly provided them.",
             "If query references previous listed cars (those/them/same range/remaining), choose function 1 with mode='remaining' or mode='list'.",
+            "CRITICAL: Due to Indian English accent in speech-to-text, the words 'invented', 'invent', 'inventery', 'inventor', 'inventory of' all mean 'inventory'. Any query about car count, stock, available cars, or car listing MUST use Function 1.",
+            "When in doubt between Function 1 and Function 2 for any car-related query, always prefer Function 1.",
             "Do not include markdown, comments, or extra text.",
           ].join("\n"),
         },
@@ -243,7 +245,7 @@ export class OpenAiProvider {
     const model =
       this.normalizeEnvValue(
         this.configService.get<string>("GROQ_TRANSCRIPTION_MODEL") ?? process.env.GROQ_TRANSCRIPTION_MODEL,
-      ) ?? "whisper-large-v3-turbo";
+      ) ?? "whisper-large-v3";
 
     if (!apiKey) {
       this.logger.warn("GROQ API key missing; transcription fallback returns empty text");
@@ -269,6 +271,10 @@ export class OpenAiProvider {
         formData.append("model", model);
         formData.append("response_format", "json");
         formData.append("language", "en");
+        formData.append(
+          "prompt",
+          "inventory, cars available, how many cars, price in lakhs, booking, callback, dealership, test drive, variant, fuel type, diesel, petrol, automatic, manual, car dealer, SUV, sedan",
+        );
 
         const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
           method: "POST",

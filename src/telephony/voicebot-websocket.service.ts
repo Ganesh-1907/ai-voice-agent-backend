@@ -22,6 +22,7 @@ type ExotelStartMessage = {
     media_format?: {
       sample_rate?: string | number;
       sampleRate?: string | number;
+      encoding?: string;
     };
   };
 };
@@ -57,9 +58,11 @@ type VoicebotSession = {
   toNumber?: string;
   startedAt?: Date;
   sampleRate: number;
+  audioEncoding: "linear16" | "mulaw";
   audioChunks: Buffer[];
   processing: boolean;
   sendingAudio: boolean;
+  interrupted?: boolean;
   flushTimer?: NodeJS.Timeout;
   sequenceNumber: number;
   mediaChunk: number;
@@ -112,6 +115,7 @@ export class VoicebotWebSocketService {
         ws,
         sessionId: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
         sampleRate: Number.isFinite(sampleRate) ? sampleRate : 8000,
+        audioEncoding: "mulaw",
         audioChunks: [],
         processing: false,
         sendingAudio: false,
@@ -202,8 +206,15 @@ export class VoicebotWebSocketService {
       session.sampleRate = sampleRate;
     }
 
+    const encodingRaw = (start.media_format?.encoding ?? "").toLowerCase();
+    if (encodingRaw.includes("linear") || encodingRaw.includes("l16") || encodingRaw.includes("pcm")) {
+      session.audioEncoding = "linear16";
+    } else {
+      session.audioEncoding = "mulaw";
+    }
+
     this.logger.log(
-      `[${session.sessionId}] Exotel event=start streamSid=${session.streamSid ?? "missing"} callSid=${session.exotelCallSid ?? "missing"} from=${session.fromNumber ?? "missing"} to=${session.toNumber ?? "missing"} sampleRate=${session.sampleRate}`,
+      `[${session.sessionId}] Exotel event=start streamSid=${session.streamSid ?? "missing"} callSid=${session.exotelCallSid ?? "missing"} from=${session.fromNumber ?? "missing"} to=${session.toNumber ?? "missing"} sampleRate=${session.sampleRate} audioEncoding=${session.audioEncoding}`,
     );
 
     const business =
@@ -269,12 +280,29 @@ export class VoicebotWebSocketService {
       );
     }
 
-    if (session.processing || session.sendingAudio) {
+    if (session.processing) {
       return;
     }
 
-    const hasSpeech = this.hasSpeech(chunk);
-    const chunkDurationMs = Math.round((chunk.length / (session.sampleRate * 2)) * 1000);
+    const bytesPerSample = session.audioEncoding === "mulaw" ? 1 : 2;
+    const hasSpeech = this.hasSpeech(chunk, session.audioEncoding);
+    const chunkDurationMs = Math.round((chunk.length / (session.sampleRate * bytesPerSample)) * 1000);
+
+    if (session.sendingAudio) {
+      if (hasSpeech && !session.interrupted) {
+        session.interrupted = true;
+        session.speechStarted = true;
+        session.silenceMs = 0;
+        session.bufferedAudioMs = 0;
+        this.logger.log(`[${session.sessionId}] customer interrupted agent speech`);
+      }
+      if (session.interrupted) {
+        session.audioChunks.push(chunk);
+        session.bufferedAudioMs += chunkDurationMs;
+        session.silenceMs = hasSpeech ? 0 : session.silenceMs + chunkDurationMs;
+      }
+      return;
+    }
 
     if (!session.speechStarted) {
       if (!hasSpeech) {
@@ -384,9 +412,10 @@ export class VoicebotWebSocketService {
 
     session.processing = true;
     try {
-      this.logger.log(`[${session.sessionId}] transcribing audio bytes=${pcmBuffer.length}`);
+      this.logger.log(`[${session.sessionId}] transcribing audio bytes=${pcmBuffer.length} encoding=${session.audioEncoding}`);
       await this.sendTextReply(session, this.processingPrompt);
-      const wavBuffer = this.wrapPcmAsWav(pcmBuffer, session.sampleRate);
+      const linear16Buffer = session.audioEncoding === "mulaw" ? this.decodeMuLaw(pcmBuffer) : pcmBuffer;
+      const wavBuffer = this.wrapPcmAsWav(linear16Buffer, session.sampleRate);
       const transcription = await this.aiService.transcribeAudio({
         buffer: wavBuffer,
         filename: "exotel-voicebot.wav",
@@ -432,6 +461,7 @@ export class VoicebotWebSocketService {
         session.speechStarted = false;
         session.silenceMs = 0;
         session.bufferedAudioMs = 0;
+        session.interrupted = false;
         session.sendingAudio = true;
         await this.sendPcmAudio(session, Buffer.from(aiReply.audioBase64, "base64"));
         session.sendingAudio = false;
@@ -445,6 +475,12 @@ export class VoicebotWebSocketService {
     } finally {
       session.processing = false;
       session.sendingAudio = false;
+    }
+
+    if (session.interrupted && session.audioChunks.length > 0) {
+      session.interrupted = false;
+      this.logger.log(`[${session.sessionId}] flushing buffered interrupt audio chunks=${session.audioChunks.length}`);
+      await this.flushAudio(session);
     }
   }
 
@@ -527,6 +563,11 @@ export class VoicebotWebSocketService {
         return;
       }
 
+      if (session.interrupted) {
+        this.logger.log(`[${session.sessionId}] customer interrupted agent; stopping audio playback chunksSent=${chunksSent}`);
+        break;
+      }
+
       const chunk = this.padPcmChunk(pcmBuffer.subarray(offset, offset + chunkSize), 320, 3200);
       chunksSent += 1;
       session.ws.send(
@@ -596,19 +637,35 @@ export class VoicebotWebSocketService {
     return Buffer.concat([header, pcmBuffer]);
   }
 
-  private hasSpeech(pcmBuffer: Buffer) {
-    if (pcmBuffer.length < 2) {
+  private hasSpeech(rawBuffer: Buffer, encoding: "linear16" | "mulaw" = "linear16") {
+    const buffer = encoding === "mulaw" ? this.decodeMuLaw(rawBuffer) : rawBuffer;
+    if (buffer.length < 2) {
       return false;
     }
 
     let totalAmplitude = 0;
     let samples = 0;
-    for (let index = 0; index + 1 < pcmBuffer.length; index += 2) {
-      totalAmplitude += Math.abs(pcmBuffer.readInt16LE(index));
+    for (let index = 0; index + 1 < buffer.length; index += 2) {
+      totalAmplitude += Math.abs(buffer.readInt16LE(index));
       samples += 1;
     }
 
     return totalAmplitude / samples > this.speechAmplitudeThreshold;
+  }
+
+  private decodeMuLaw(muLawBuffer: Buffer): Buffer {
+    const pcm = Buffer.alloc(muLawBuffer.length * 2);
+    for (let i = 0; i < muLawBuffer.length; i++) {
+      const byte = (~muLawBuffer[i]) & 0xff;
+      const sign = byte & 0x80;
+      const exponent = (byte >> 4) & 0x07;
+      const mantissa = byte & 0x0f;
+      let magnitude = ((mantissa << 1) + 33) << exponent;
+      magnitude -= 33;
+      const sample = sign ? -magnitude : magnitude;
+      pcm.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), i * 2);
+    }
+    return pcm;
   }
 
   private parseJson(rawMessage: string) {
