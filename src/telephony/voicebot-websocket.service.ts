@@ -5,6 +5,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { AiService } from "../ai/ai.service";
 import { BusinessesService } from "../businesses/businesses.service";
 import { CallsService } from "../calls/calls.service";
+import { LeadsService } from "../leads/leads.service";
+import { UpdatesService } from "../updates/updates.service";
 
 type ExotelStartMessage = {
   event: "start";
@@ -53,6 +55,7 @@ type VoicebotSession = {
   business?: Awaited<ReturnType<BusinessesService["getByRoutingNumber"]>>;
   fromNumber?: string;
   toNumber?: string;
+  startedAt?: Date;
   sampleRate: number;
   audioChunks: Buffer[];
   processing: boolean;
@@ -81,6 +84,8 @@ export class VoicebotWebSocketService {
     @Inject(BusinessesService) private readonly businessesService: BusinessesService,
     @Inject(CallsService) private readonly callsService: CallsService,
     @Inject(AiService) private readonly aiService: AiService,
+    @Inject(UpdatesService) private readonly updatesService: UpdatesService,
+    @Inject(LeadsService) private readonly leadsService: LeadsService,
   ) {}
 
   attach(httpServer: HttpServer) {
@@ -218,7 +223,11 @@ export class VoicebotWebSocketService {
       `[${session.sessionId}] business mapped businessId=${business.id} businessName="${business.name}" routeNumber=${business.businessPhoneNumber}`,
     );
 
-    const [call] = await this.callsService.create({
+    const existingCall = session.exotelCallSid
+      ? await this.callsService.getByExotelCallSid(session.exotelCallSid)
+      : null;
+
+    const call = existingCall ?? (await this.callsService.create({
       businessId: business.id,
       exotelCallSid: session.exotelCallSid,
       fromNumber: session.fromNumber ?? "unknown",
@@ -228,9 +237,10 @@ export class VoicebotWebSocketService {
         mode: "exotel-voicebot",
         start,
       },
-    });
+    }))[0];
 
     session.callId = call.id;
+    session.startedAt = new Date();
     this.logger.log(`[${session.sessionId}] call created callId=${session.callId} status=${call.status}`);
     this.logger.log(`[${session.sessionId}] waiting for caller media after Exotel greeting`);
   }
@@ -283,6 +293,62 @@ export class VoicebotWebSocketService {
       `[${session.sessionId}] Exotel event=stop streamSid=${message.stream_sid ?? message.streamSid ?? session.streamSid ?? "missing"} callSid=${stop.call_sid ?? stop.callSid ?? session.exotelCallSid ?? "missing"} reason=${stop.reason ?? "missing"}`,
     );
     await this.flushAudio(session);
+    await this.finalizeCall(session);
+  }
+
+  private async finalizeCall(session: VoicebotSession) {
+    if (!session.callId || !session.business) {
+      return;
+    }
+
+    const durationSeconds = session.startedAt
+      ? Math.round((Date.now() - session.startedAt.getTime()) / 1000)
+      : undefined;
+
+    try {
+      const call = await this.callsService.getByIdOrFail(session.callId);
+      const transcript = await this.callsService.buildTranscriptFromMeta(call);
+
+      if (!transcript.trim()) {
+        if (durationSeconds !== undefined) {
+          await this.callsService.attachTranscript(session.callId, "", undefined, durationSeconds);
+        }
+        await this.callsService.updateStatus(session.callId, "completed");
+        this.logger.log(`[${session.sessionId}] call finalized (no transcript) durationSeconds=${durationSeconds ?? 0}`);
+        return;
+      }
+
+      const summary = await this.aiService.generateSummary(transcript);
+      await this.callsService.attachTranscript(session.callId, transcript, summary, durationSeconds);
+      await this.callsService.updateStatus(session.callId, "completed");
+
+      this.logger.log(
+        `[${session.sessionId}] call finalized callId=${session.callId} durationSeconds=${durationSeconds ?? 0} transcriptLen=${transcript.length}`,
+      );
+
+      await this.updatesService.createFromCall({
+        businessId: session.business.id,
+        callId: session.callId,
+        fromNumber: session.fromNumber ?? "unknown",
+        summary,
+        transcript,
+      });
+
+      const extractedLead = await this.aiService.extractLeadData(transcript);
+      await this.leadsService.create(
+        session.business.id,
+        {
+          name: extractedLead.name,
+          phone: session.fromNumber ?? "unknown",
+          intent: extractedLead.intent,
+          notes: extractedLead.notes,
+        },
+        session.callId,
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown finalization error";
+      this.logger.error(`[${session.sessionId}] call finalization failed callId=${session.callId}: ${msg}`);
+    }
   }
 
   private async flushAudio(session: VoicebotSession) {

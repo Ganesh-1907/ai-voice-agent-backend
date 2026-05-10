@@ -277,6 +277,27 @@ export class TelephonyController {
   }
 
   @Public()
+  @Post("webhooks/exotel/call-status")
+  async callStatus(
+    @Body(
+      new ValidationPipe({
+        whitelist: false,
+        forbidNonWhitelisted: false,
+        transform: true,
+      }),
+    )
+    dto: ExotelCallWebhookDto,
+  ) {
+    return this.telephonyService.handleCallStatusWebhook(dto);
+  }
+
+  @Public()
+  @Get("webhooks/exotel/call-status")
+  async callStatusGet(@Query() query: ExotelCallWebhookDto) {
+    return this.telephonyService.handleCallStatusWebhook(query);
+  }
+
+  @Public()
   @Get("voicebot/session")
   voicebotSession(@Req() request: Request) {
     const publicBaseUrl = this.configService.get<string>("VOICEBOT_PUBLIC_BASE_URL");

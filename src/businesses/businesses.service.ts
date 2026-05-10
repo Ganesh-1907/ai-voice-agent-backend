@@ -13,20 +13,15 @@ export class BusinessesService {
 
   async create(ownerUserId: string, dto: CreateBusinessDto) {
     const owner = await this.getOwnerUserOrFail(ownerUserId);
+    const isSuperAdmin = owner.role === "super_admin";
 
     const [business] = await this.database.db
       .insert(businesses)
       .values({
         businessName: dto.name,
         slug: dto.slug,
-        ownerUserId: owner.id,
-        serviceType:
-          dto.settings?.serviceType === "car_dealer" ||
-          dto.settings?.serviceType === "appliance_store" ||
-          dto.settings?.serviceType === "electronics_store" ||
-          dto.settings?.serviceType === "other"
-            ? dto.settings.serviceType
-            : "mixed_inventory",
+        ownerUserId: isSuperAdmin ? null : owner.id,
+        serviceType: this.resolveServiceType(dto.settings?.serviceType),
         contactNumber: dto.businessPhoneNumber,
         primaryEmail: typeof dto.settings?.primaryEmail === "string" ? dto.settings.primaryEmail : undefined,
         primaryMobile: dto.virtualPhoneNumber,
@@ -44,13 +39,13 @@ export class BusinessesService {
       })
       .returning();
 
-    await this.database.db
-      .update(users)
-      .set({
-        businessId: business.id,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, owner.id));
+    // Only link the new business to the creating user when they are not super_admin
+    if (!isSuperAdmin) {
+      await this.database.db
+        .update(users)
+        .set({ businessId: business.id, updatedAt: new Date() })
+        .where(eq(users.id, owner.id));
+    }
 
     return [this.toApiBusiness(business)];
   }
@@ -130,14 +125,7 @@ export class BusinessesService {
       .set({
         businessName: dto.name ?? existing.name,
         slug: dto.slug ?? existing.slug,
-        serviceType:
-          dto.settings?.serviceType === "car_dealer" ||
-          dto.settings?.serviceType === "appliance_store" ||
-          dto.settings?.serviceType === "electronics_store" ||
-          dto.settings?.serviceType === "other" ||
-          dto.settings?.serviceType === "mixed_inventory"
-            ? dto.settings.serviceType
-            : existing.serviceType ?? "mixed_inventory",
+        serviceType: this.resolveServiceType(dto.settings?.serviceType) ?? existing.serviceType ?? "mixed_inventory",
         contactNumber: dto.businessPhoneNumber ?? existing.businessPhoneNumber,
         primaryEmail:
           typeof dto.settings?.primaryEmail === "string"
@@ -283,6 +271,16 @@ export class BusinessesService {
     return Array.from(
       new Set([phoneNumber, normalized, digitsOnly, withoutLeadingZero, withoutIndiaCode, lastTenDigits].filter(Boolean)),
     );
+  }
+
+  private resolveServiceType(value: unknown): typeof businesses.$inferInsert["serviceType"] {
+    const validTypes = new Set([
+      "car_dealer", "appliance_store", "electronics_store", "mixed_inventory",
+      "restaurant", "fashion", "furniture", "service_business", "other",
+    ]);
+    return validTypes.has(value as string)
+      ? (value as typeof businesses.$inferInsert["serviceType"])
+      : "mixed_inventory";
   }
 
   private matchesLookupCandidates(value: string | null | undefined, candidates: string[]) {

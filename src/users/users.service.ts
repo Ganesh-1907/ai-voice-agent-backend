@@ -87,6 +87,29 @@ export class UsersService {
     return rows.map((row) => this.mapUser(row));
   }
 
+  async createForBusiness(
+    businessId: string,
+    input: { name: string; email: string; passwordHash: string; role?: "owner" | "admin" | "staff" },
+  ) {
+    const existing = await this.findByEmail(input.email);
+    if (existing) {
+      throw new ConflictException("User with this email already exists");
+    }
+
+    const [user] = await this.database.db
+      .insert(users)
+      .values({
+        businessId: Number(businessId),
+        name: input.name,
+        email: input.email.toLowerCase(),
+        passwordHash: input.passwordHash,
+        role: input.role ?? "owner",
+      })
+      .returning();
+
+    return this.mapUser(user);
+  }
+
   async resetPasswordByEmail(email: string, passwordHash: string) {
     const [user] = await this.database.db
       .update(users)

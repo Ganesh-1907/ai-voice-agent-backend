@@ -277,6 +277,38 @@ export class TelephonyService {
     };
   }
 
+  async handleCallStatusWebhook(dto: ExotelCallWebhookDto) {
+    const exotelCallSid = this.resolveCallSid(dto);
+    if (!exotelCallSid) {
+      return { ignored: true, reason: "no call SID" };
+    }
+
+    const call = await this.callsService.getByExotelCallSid(exotelCallSid);
+    if (!call) {
+      return { ignored: true, reason: "call not found" };
+    }
+
+    const rawStatus = this.readField(dto, ["CallStatus", "Status", "call_status", "status"]);
+    const mappedStatus = this.mapExotelStatusToCallStatus(rawStatus);
+    const rawDuration = this.readField(dto, ["Duration", "RecordingDuration", "duration"]);
+    const durationSeconds = rawDuration ? Math.round(Number(rawDuration)) : undefined;
+
+    if (mappedStatus && call.status !== mappedStatus) {
+      await this.callsService.updateStatus(call.id, mappedStatus);
+    }
+
+    if (durationSeconds !== undefined && durationSeconds > 0 && !call.durationSeconds) {
+      await this.callsService.attachTranscript(
+        call.id,
+        call.transcript ?? "",
+        call.summary ?? undefined,
+        durationSeconds,
+      );
+    }
+
+    return { callId: call.id, status: mappedStatus, durationSeconds };
+  }
+
   private assertDevelopmentMode() {
     const nodeEnv = this.configService.get<string>("NODE_ENV") ?? "development";
     if (nodeEnv === "production") {

@@ -320,7 +320,10 @@ export class AiService {
     if (listByPriceIntent) {
       const available = inventory.filter((item) => item.status === "available");
       const basePool = available.length > 0 ? available : inventory;
-      const categoryPool = carsOnlyIntent ? basePool.filter((item) => item.category === "car") : basePool;
+      const isCarDealer = serviceType === "car_dealer";
+      const categoryPool = carsOnlyIntent
+        ? (isCarDealer ? basePool : basePool.filter((item) => item.category === "car"))
+        : basePool;
       const budgetRange = this.extractBudgetRangeInInr(normalizedText);
 
       const budgetFiltered = categoryPool.filter((item) => {
@@ -462,7 +465,10 @@ export class AiService {
 
     if (countIntent) {
       if (carsOnlyIntent) {
-        const carCount = inventory.filter((item) => item.category === "car").length;
+        const isCarDealer = serviceType === "car_dealer";
+        const carCount = isCarDealer
+          ? inventoryCount
+          : inventory.filter((item) => item.category === "car").length;
         return `At the moment, we have exactly ${carCount} cars in inventory.`;
       }
 

@@ -1,11 +1,13 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post } from "@nestjs/common";
+import { Body, Controller, ForbiddenException, Get, Inject, Param, Patch, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import * as bcrypt from "bcryptjs";
 
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { JwtUser } from "../auth/types/jwt-user.type";
 import { UsersService } from "../users/users.service";
 import { BusinessesService } from "./businesses.service";
 import { CreateBusinessDto } from "./dto/create-business.dto";
+import { CreateBusinessUserDto } from "./dto/create-business-user.dto";
 import { UpdateBusinessDto } from "./dto/update-business.dto";
 
 @ApiTags("Businesses")
@@ -37,6 +39,26 @@ export class BusinessesController {
   async getBusinessUsers(@CurrentUser() user: JwtUser, @Param("businessId") businessId: string) {
     await this.businessesService.assertAccess(user.sub, businessId);
     return this.usersService.listByBusiness(businessId);
+  }
+
+  @Post(":businessId/users")
+  async createBusinessUser(
+    @CurrentUser() user: JwtUser,
+    @Param("businessId") businessId: string,
+    @Body() dto: CreateBusinessUserDto,
+  ) {
+    if (user.role !== "super_admin") {
+      throw new ForbiddenException("Only super admins can create users for a business");
+    }
+    await this.businessesService.findByIdOrFail(businessId);
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const created = await this.usersService.createForBusiness(businessId, {
+      name: dto.name,
+      email: dto.email,
+      passwordHash,
+      role: dto.role,
+    });
+    return { id: created.id, name: created.name, email: created.email, role: created.role, businessId: created.businessId };
   }
 
   @Patch(":businessId")

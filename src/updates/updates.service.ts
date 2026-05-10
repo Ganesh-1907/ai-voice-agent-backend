@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { and, desc, eq } from "drizzle-orm";
 
 import { DatabaseService } from "../database/database.service";
-import { businesses, callRequests } from "../database/schema";
+import { businesses, callRequests, orders } from "../database/schema";
 import { MessagingService } from "../messaging/messaging.service";
 
 export type BusinessUpdateType = "order" | "preorder" | "book_table" | "callback_request" | "enquiry" | "booking" | "general";
@@ -74,12 +74,27 @@ export class UpdatesService {
         customerName: customerName ?? null,
         customerMobile: customerMobile ?? null,
         summary: input.summary,
+        transcript: input.transcript,
         requestType,
         status: requestType === "callback_request" ? "callback_scheduled" : "pending",
         createdAt: now,
         updatedAt: now,
       })
       .returning();
+
+    if (requestType === "order" || requestType === "booking" || requestType === "book_table" || requestType === "preorder") {
+      await this.database.db.insert(orders).values({
+        businessId: Number(input.businessId),
+        callId: input.callId,
+        customerNumber: customerMobile ?? input.fromNumber,
+        customerName: customerName ?? null,
+        summary: input.summary,
+        transcript: input.transcript,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
 
     return this.mapCallRequest(created);
   }
