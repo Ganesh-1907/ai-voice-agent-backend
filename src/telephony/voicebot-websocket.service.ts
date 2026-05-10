@@ -242,7 +242,16 @@ export class VoicebotWebSocketService {
     session.callId = call.id;
     session.startedAt = new Date();
     this.logger.log(`[${session.sessionId}] call created callId=${session.callId} status=${call.status}`);
-    this.logger.log(`[${session.sessionId}] waiting for caller media after Exotel greeting`);
+
+    const greeting = this.businessesService.getAgentGreeting(business);
+    this.logger.log(`[${session.sessionId}] sending agent greeting text="${this.truncate(greeting)}"`);
+    await this.sendTextReply(session, greeting);
+    await this.callsService.appendConversationTurn(session.callId, {
+      speaker: "agent",
+      text: greeting,
+      createdAt: new Date().toISOString(),
+    });
+    this.logger.log(`[${session.sessionId}] greeting sent — waiting for customer to speak`);
   }
 
   private handleMedia(session: VoicebotSession, message: ExotelMediaMessage) {

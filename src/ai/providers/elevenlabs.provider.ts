@@ -4,7 +4,7 @@ import { ConfigService } from "@nestjs/config";
 @Injectable()
 export class ElevenLabsProvider {
   private readonly logger = new Logger(ElevenLabsProvider.name);
-  private ttsTemporarilyDisabled = false;
+  private readonly MAX_TTS_CHARS = 220;
 
   constructor(@Inject(ConfigService) private readonly configService: ConfigService) {}
 
@@ -12,14 +12,6 @@ export class ElevenLabsProvider {
     const apiKey = this.configService.get<string>("ELEVENLABS_API_KEY");
     const voiceId = this.configService.get<string>("ELEVENLABS_VOICE_ID");
     const outputFormat = options?.outputFormat ?? "mp3_44100_128";
-
-    if (this.ttsTemporarilyDisabled) {
-      this.logger.warn("ElevenLabs TTS skipped because it is temporarily disabled in this process");
-      return {
-        audioBase64: null,
-        text,
-      };
-    }
 
     if (!apiKey || !voiceId) {
       this.logger.warn("ElevenLabs is not configured; returning text-only fallback");
@@ -29,10 +21,13 @@ export class ElevenLabsProvider {
       };
     }
 
+    const truncatedText =
+      text.length > this.MAX_TTS_CHARS ? `${text.slice(0, this.MAX_TTS_CHARS - 3)}...` : text;
+
     try {
       const startedAt = Date.now();
       this.logger.log(
-        `ElevenLabs TTS request voiceId=${voiceId} outputFormat=${outputFormat} textChars=${text.length}`,
+        `ElevenLabs TTS request voiceId=${voiceId} outputFormat=${outputFormat} textChars=${truncatedText.length}${truncatedText.length < text.length ? ` (truncated from ${text.length})` : ""}`,
       );
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${outputFormat}`, {
         method: "POST",
@@ -41,18 +36,25 @@ export class ElevenLabsProvider {
           "xi-api-key": apiKey,
         },
         body: JSON.stringify({
-          text,
+          text: truncatedText,
           model_id: "eleven_multilingual_v2",
         }),
       });
 
       if (!response.ok) {
         const rawBody = await response.text().catch(() => "");
-        if (response.status === 401 || response.status === 402 || response.status === 403) {
-          this.ttsTemporarilyDisabled = true;
-          this.logger.warn(
-            `ElevenLabs disabled for this process due to status ${response.status}: ${this.truncate(rawBody)}`,
-          );
+        let isQuotaError = false;
+        try {
+          const parsed = JSON.parse(rawBody) as { detail?: { status?: string } };
+          isQuotaError = parsed?.detail?.status === "quota_exceeded";
+        } catch {
+          // ignore JSON parse error
+        }
+
+        if (isQuotaError) {
+          this.logger.warn(`ElevenLabs quota exceeded for textChars=${truncatedText.length}: ${this.truncate(rawBody)}`);
+        } else if (response.status === 401 || response.status === 403) {
+          this.logger.error(`ElevenLabs auth error status=${response.status}: ${this.truncate(rawBody)}`);
         } else {
           this.logger.error(`ElevenLabs TTS failed with status ${response.status}: ${this.truncate(rawBody)}`);
         }
