@@ -29,7 +29,7 @@ export const envSchema = z.object({
   WHATSAPP_ACCESS_TOKEN: z.string().optional(),
   WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
-  WEBHOOK_SECRET: z.string().min(8),
+  WEBHOOK_SECRET: z.string().min(8).optional(),
   DEFAULT_COUNTRY_CODE: z.string().default("+91"),
 });
 
