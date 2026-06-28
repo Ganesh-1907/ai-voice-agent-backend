@@ -17,7 +17,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
-export const userRoleEnum = pgEnum("user_role", ["super_admin", "owner", "admin", "staff"]);
+export const userRoleEnum = pgEnum("user_role", ["owner", "admin", "staff", "super_admin"]);
 export const accountStatusEnum = pgEnum("account_status", ["active", "paused", "inactive"]);
 export const planCodeEnum = pgEnum("plan_code", ["starter", "growth", "pro", "basic", "professional", "enterprise"]);
 
@@ -26,11 +26,11 @@ export const serviceTypeEnum = pgEnum("service_type", [
   "appliance_store",
   "electronics_store",
   "mixed_inventory",
+  "other",
   "restaurant",
   "fashion",
   "furniture",
   "service_business",
-  "other",
 ]);
 
 export const itemTypeEnum = pgEnum("item_type", ["product", "service"]);
@@ -44,17 +44,17 @@ export const productCategoryEnum = pgEnum("product_category", [
   "tv",
   "mobile",
   "furniture",
+  "other",
   "fashion",
   "restaurant",
   "service",
-  "other",
 ]);
 export const productConditionEnum = pgEnum("product_condition", ["new", "used", "refurbished"]);
-export const productStatusEnum = pgEnum("product_status", ["draft", "active", "available", "reserved", "sold", "inactive"]);
+export const productStatusEnum = pgEnum("product_status", ["draft", "available", "reserved", "sold", "inactive", "active"]);
 export const fuelTypeEnum = pgEnum("fuel_type", ["petrol", "diesel", "electric", "hybrid", "cng", "lpg", "other"]);
 export const transmissionTypeEnum = pgEnum("transmission_type", ["manual", "automatic", "semi_automatic", "other"]);
 
-export const callStatusEnum = pgEnum("call_status", ["initiated", "in_progress", "answered", "missed", "completed", "failed"]);
+export const callStatusEnum = pgEnum("call_status", ["initiated", "in_progress", "completed", "failed", "answered", "missed"]);
 export const callTurnSpeakerEnum = pgEnum("call_turn_speaker", ["customer", "agent", "system"]);
 export const leadTypeEnum = pgEnum("lead_type", ["enquiry", "booking", "callback", "order", "preorder", "book_table", "general"]);
 export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "qualified", "booked", "closed", "cancelled", "lost"]);
@@ -64,9 +64,9 @@ export const callRequestTypeEnum = pgEnum("call_request_type", [
   "preorder",
   "book_table",
   "callback_request",
+  "general",
   "enquiry",
   "booking",
-  "general",
 ]);
 export const callRequestStatusEnum = pgEnum("call_request_status", [
   "pending",
