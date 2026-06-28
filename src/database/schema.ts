@@ -78,6 +78,10 @@ export const callRequestStatusEnum = pgEnum("call_request_status", [
   "not_called",
 ]);
 
+export const waMessageDirectionEnum = pgEnum("wa_message_direction", ["inbound", "outbound"]);
+export const waMessageTypeEnum = pgEnum("wa_message_type", ["text", "interactive", "image"]);
+export const waMessageStatusEnum = pgEnum("wa_message_status", ["queued", "sent", "delivered", "read", "failed"]);
+
 export const businesses = pgTable(
   "businesses",
   {
@@ -447,9 +451,38 @@ export const callRequests = pgTable(
   }),
 );
 
+export const whatsappMessages = pgTable(
+  "whatsapp_messages",
+  {
+    id: text("id").primaryKey(),
+    businessId: bigint("business_id", { mode: "number" })
+      .notNull()
+      .references(() => businesses.id, { onDelete: "cascade" }),
+    callId: text("call_id").references(() => calls.id, { onDelete: "set null" }),
+    customerPhone: varchar("customer_phone", { length: 30 }).notNull(),
+    direction: waMessageDirectionEnum("direction").notNull().default("outbound"),
+    messageType: waMessageTypeEnum("message_type").notNull().default("text"),
+    body: text("body"),
+    buttonPayload: jsonb("button_payload").$type<Record<string, unknown>>(),
+    providerMessageId: varchar("provider_message_id", { length: 200 }),
+    status: waMessageStatusEnum("status").notNull().default("queued"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    businessIdx: index("wa_messages_business_id_idx").on(table.businessId),
+    callIdx: index("wa_messages_call_id_idx").on(table.callId),
+    customerPhoneIdx: index("wa_messages_customer_phone_idx").on(table.customerPhone),
+    statusIdx: index("wa_messages_status_idx").on(table.status),
+    providerMsgIdx: index("wa_messages_provider_msg_id_idx").on(table.providerMessageId),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type Business = typeof businesses.$inferSelect;
 export type Product = typeof products.$inferSelect;
 export type Call = typeof calls.$inferSelect;
 export type Lead = typeof leads.$inferSelect;
 export type Order = typeof orders.$inferSelect;
+export type WhatsAppMessage = typeof whatsappMessages.$inferSelect;

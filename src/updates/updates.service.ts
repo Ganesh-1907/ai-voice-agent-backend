@@ -152,11 +152,12 @@ export class UpdatesService {
       approvalNote: approved.approvalNote,
     });
 
-    const message = await this.messagingService.sendWhatsAppMessage(input.businessId, {
-      recipient: approved.customerMobile ?? approved.fromNumber,
-      body: messageBody,
-      callId: approved.callId,
-    });
+    const message = await this.messagingService.sendAndStoreText(
+      input.businessId,
+      approved.callId ?? null,
+      approved.customerMobile ?? approved.fromNumber,
+      messageBody
+    );
 
     const [finalRow] = await this.database.db
       .update(callRequests)

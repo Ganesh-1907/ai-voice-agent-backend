@@ -26,9 +26,9 @@ export const envSchema = z.object({
   GROQ_TRANSCRIPTION_MODEL: z.string().default("whisper-large-v3-turbo"),
   ELEVENLABS_API_KEY: z.string().optional(),
   ELEVENLABS_VOICE_ID: z.string().optional(),
-  WHATSAPP_API_URL: z.string().url().optional().or(z.literal("")),
-  WHATSAPP_API_TOKEN: z.string().optional(),
-  WHATSAPP_SENDER_ID: z.string().optional(),
+  WHATSAPP_ACCESS_TOKEN: z.string().optional(),
+  WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   WEBHOOK_SECRET: z.string().min(8),
   DEFAULT_COUNTRY_CODE: z.string().default("+91"),
 });

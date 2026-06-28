@@ -174,24 +174,14 @@ export class CallsService {
   ) {
     await this.getByIdOrFail(callId);
 
-    await this.database.db.insert(callTurns).values({
+    const [inserted] = await this.database.db.insert(callTurns).values({
       callId,
       speaker: turn.speaker,
       text: turn.text,
       createdAt: new Date(turn.createdAt),
-    });
+    }).returning();
 
-    const [updated] = await this.database.db
-      .update(calls)
-      .set({ updatedAt: new Date() })
-      .where(eq(calls.id, callId))
-      .returning();
-
-    if (!updated) {
-      throw new NotFoundException("Call not found");
-    }
-
-    return this.mapCall(updated);
+    return inserted;
   }
 
   async buildTranscriptFromMeta(call: Awaited<ReturnType<CallsService["getByIdOrFail"]>>) {

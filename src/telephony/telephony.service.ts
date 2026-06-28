@@ -5,6 +5,7 @@ import { AiService } from "../ai/ai.service";
 import { BusinessesService } from "../businesses/businesses.service";
 import { CallsService } from "../calls/calls.service";
 import { LeadsService } from "../leads/leads.service";
+import { MessagingService } from "../messaging/messaging.service";
 import { ExotelCallWebhookDto } from "./dto/exotel-call-webhook.dto";
 import { StartPublicTestCallDto } from "./dto/start-public-test-call.dto";
 import { StartTestCallDto } from "./dto/start-test-call.dto";
@@ -22,6 +23,7 @@ export class TelephonyService {
     @Inject(LeadsService) private readonly leadsService: LeadsService,
     @Inject(UpdatesService) private readonly updatesService: UpdatesService,
     @Inject(ExotelProvider) private readonly exotelProvider: ExotelProvider,
+    @Inject(MessagingService) private readonly messagingService: MessagingService,
   ) {}
 
   async handleIncomingWebhook(dto: ExotelCallWebhookDto, webhookSecret?: string) {
@@ -89,12 +91,12 @@ export class TelephonyService {
     const call = await this.callsService.getByIdOrFail(callId);
     const business = await this.businessesService.findByIdOrFail(call.businessId);
     await this.callsService.updateStatus(callId, "in_progress");
-    const callWithCustomerTurn = await this.callsService.appendConversationTurn(callId, {
+    await this.callsService.appendConversationTurn(callId, {
       speaker: "customer",
       text: customerText,
       createdAt: new Date().toISOString(),
     });
-    const conversationContext = await this.callsService.buildTranscriptFromMeta(callWithCustomerTurn);
+    const conversationContext = await this.callsService.buildTranscriptFromMeta(call);
 
     const aiReply = await this.aiService.processCallTurn(business, customerText, conversationContext);
     await this.callsService.appendConversationTurn(callId, {
@@ -267,13 +269,30 @@ export class TelephonyService {
       input.callId,
     );
 
+    // Trigger WhatsApp follow-up (fire-and-forget)
+    if (input.customerPhone && input.customerPhone !== "unknown") {
+      this.messagingService.sendPostCallFollowUp({
+        businessId: input.businessId,
+        businessName: business.name,
+        callId: input.callId,
+        customerPhone: input.customerPhone,
+        callSummary: summary,
+        productsAsked: [],
+        hasOrder: false,
+      }).catch((err: unknown) => {
+        const errMsg = err instanceof Error ? err.message : "Unknown error";
+        // Non-critical; call completion should not fail because of WhatsApp
+        // eslint-disable-next-line no-console
+        console.error(`WhatsApp follow-up failed: ${errMsg}`);
+      });
+    }
+
     return {
       call,
       lead,
       update,
-      message: null,
-      whatsappDisabled: true,
-      nextStep: `Call stored for ${business.name}. WhatsApp follow-up is disabled for now.`,
+      whatsappFollowUpTriggered: input.customerPhone !== "unknown",
+      nextStep: `Call stored for ${business.name}. WhatsApp follow-up has been triggered.`,
     };
   }
 

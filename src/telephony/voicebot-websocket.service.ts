@@ -71,6 +71,7 @@ type VoicebotSession = {
   speechStarted: boolean;
   silenceMs: number;
   bufferedAudioMs: number;
+  conversationContext: string[];
 };
 
 @Injectable()
@@ -127,6 +128,7 @@ export class VoicebotWebSocketService {
         speechStarted: false,
         silenceMs: 0,
         bufferedAudioMs: 0,
+        conversationContext: [],
       };
 
       this.logger.log(
@@ -199,6 +201,7 @@ export class VoicebotWebSocketService {
     session.starting = true;
     session.readyForCallerAudio = false;
     session.audioChunks = [];
+    session.conversationContext = [];
     session.speechStarted = false;
     session.silenceMs = 0;
     session.bufferedAudioMs = 0;
@@ -266,11 +269,14 @@ export class VoicebotWebSocketService {
     session.speechStarted = false;
     session.silenceMs = 0;
     session.bufferedAudioMs = 0;
-    await this.callsService.appendConversationTurn(session.callId, {
+    session.conversationContext.push(`Agent: ${greeting}`);
+    
+    void this.callsService.appendConversationTurn(session.callId, {
       speaker: "agent",
       text: greeting,
       createdAt: new Date().toISOString(),
-    });
+    }).catch((err) => this.logger.error(`[${session.sessionId}] Failed to append greeting turn: ${err}`));
+    
     session.readyForCallerAudio = true;
     session.starting = false;
     this.logger.log(`[${session.sessionId}] greeting sent - waiting for customer to speak`);
@@ -332,7 +338,10 @@ export class VoicebotWebSocketService {
       `[${session.sessionId}] Exotel event=stop streamSid=${message.stream_sid ?? message.streamSid ?? session.streamSid ?? "missing"} callSid=${stop.call_sid ?? stop.callSid ?? session.exotelCallSid ?? "missing"} reason=${stop.reason ?? "missing"}`,
     );
     await this.flushAudio(session);
-    await this.finalizeCall(session);
+    // Fire and forget finalization to free up websocket handling
+    void this.finalizeCall(session).catch((err) => 
+      this.logger.error(`[${session.sessionId}] Background finalization failed: ${err}`)
+    );
   }
 
   private async finalizeCall(session: VoicebotSession) {
@@ -345,8 +354,7 @@ export class VoicebotWebSocketService {
       : undefined;
 
     try {
-      const call = await this.callsService.getByIdOrFail(session.callId);
-      const transcript = await this.callsService.buildTranscriptFromMeta(call);
+      const transcript = session.conversationContext.join("\n");
 
       if (!transcript.trim()) {
         if (durationSeconds !== undefined) {
@@ -357,7 +365,12 @@ export class VoicebotWebSocketService {
         return;
       }
 
-      const summary = await this.aiService.generateSummary(transcript);
+      // Run AI operations concurrently
+      const [summary, extractedLead] = await Promise.all([
+        this.aiService.generateSummary(transcript),
+        this.aiService.extractLeadData(transcript),
+      ]);
+
       await this.callsService.attachTranscript(session.callId, transcript, summary, durationSeconds);
       await this.callsService.updateStatus(session.callId, "completed");
 
@@ -373,7 +386,6 @@ export class VoicebotWebSocketService {
         transcript,
       });
 
-      const extractedLead = await this.aiService.extractLeadData(transcript);
       await this.leadsService.create(
         session.business.id,
         {
@@ -427,19 +439,20 @@ export class VoicebotWebSocketService {
       this.logger.log(
         `[${session.sessionId}] transcription result text="${this.truncate(customerText || "")}" status=${"statusCode" in transcription ? transcription.statusCode ?? "ok" : "ok"} error=${"error" in transcription ? transcription.error ?? "none" : "none"}`,
       );
-      if (!customerText) {
+if (!customerText) {
         this.logger.warn(`[${session.sessionId}] empty transcription; no AI turn generated`);
         return;
       }
 
-      await this.callsService.appendConversationTurn(session.callId, {
+      session.conversationContext.push(`Customer: ${customerText}`);
+      void this.callsService.appendConversationTurn(session.callId, {
         speaker: "customer",
         text: customerText,
         createdAt: new Date().toISOString(),
-      });
-      const call = await this.callsService.getByIdOrFail(session.callId);
-      const conversationContext = await this.callsService.buildTranscriptFromMeta(call);
-      const aiReply = await this.aiService.processCallTurn(session.business, customerText, conversationContext, {
+      }).catch((err) => this.logger.error(`[${session.sessionId}] Failed to append customer turn: ${err}`));
+
+      const conversationContextStr = session.conversationContext.join("\n");
+      const aiReply = await this.aiService.processCallTurn(session.business, customerText, conversationContextStr, {
         ttsOutputFormat: this.getPcmOutputFormat(session),
       });
 
@@ -447,11 +460,12 @@ export class VoicebotWebSocketService {
         `[${session.sessionId}] AI reply text="${this.truncate(aiReply.replyText)}" audioBytes=${aiReply.audioBase64 ? Buffer.byteLength(aiReply.audioBase64, "base64") : 0}`,
       );
 
-      await this.callsService.appendConversationTurn(session.callId, {
+      session.conversationContext.push(`Agent: ${aiReply.replyText}`);
+      void this.callsService.appendConversationTurn(session.callId, {
         speaker: "agent",
         text: aiReply.replyText,
         createdAt: new Date().toISOString(),
-      });
+      }).catch((err) => this.logger.error(`[${session.sessionId}] Failed to append agent turn: ${err}`));
 
       if (aiReply.audioBase64) {
         if (session.ws.readyState !== session.ws.OPEN) {
